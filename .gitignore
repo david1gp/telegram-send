@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Bun package manager cache
+bun.lockb
+
+# Output
+dist/
+*.tgz
+/build/
+
+# Code coverage
+coverage/
+*.lcov
+
+# Logs
+logs/
+*.log
+
+# Finder (macOS) folder config
+.DS_Store
+
+# Caches
+.cache/
+*.tsbuildinfo
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.code-workspace
+!telegram-send.code-workspace
+
+# Package manager debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json
+pnpm-lock.yaml
+
+# Dotenv and local secret files
+.env
+.env.*
+
+# npm publishing
+.npmrc

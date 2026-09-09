@@ -1,0 +1,100 @@
+{
+  "name": "@adaptive-ds/telegram-send",
+  "version": "0.1.0",
+  "description": "A Result-based TypeScript Telegram sender library with tg and tg-timer command-line interfaces.",
+  "keywords": [
+    "telegram",
+    "telegram-bot",
+    "telegram-api",
+    "notifications",
+    "timer",
+    "cli",
+    "typescript",
+    "result",
+    "valibot",
+    "bun"
+  ],
+  "homepage": "https://github.com/david1gp/telegram-send",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/david1gp/telegram-send.git"
+  },
+  "bugs": {
+    "url": "https://github.com/david1gp/telegram-send/issues"
+  },
+  "author": {
+    "name": "David Siewert",
+    "url": "https://david-siewert.com/"
+  },
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/david1gp"
+  },
+  "license": "MIT",
+  "readme": "README.md",
+  "type": "module",
+  "private": false,
+  "main": "dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "tg": "./dist/cli.js",
+    "tg-timer": "./dist/timerCli.js"
+  },
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "test": "bun test",
+    "test:w": "bun test --watch",
+    "type-check": "tsc --noEmit",
+    "build": "rm -rf ./dist && tsc -p ./tsconfig.lib.json && chmod +x ./dist/cli.js ./dist/timerCli.js",
+    "deploy": "bash ./ops/deploy.sh",
+    "release": "bash ./ops/release.sh",
+    "format": "biome format --write src tests package.json tsconfig.json tsconfig.lib.json biome.json bunfig.toml cliff.toml",
+    "format:check": "biome format src tests package.json tsconfig.json tsconfig.lib.json biome.json bunfig.toml cliff.toml"
+  },
+  "dependencies": {
+    "@stricli/core": "^1.3.0"
+  },
+  "peerDependencies": {
+    "@adaptive-ds/result": ">=0.6.0",
+    "valibot": "^1.2.0"
+  },
+  "devDependencies": {
+    "@adaptive-ds/result": "^0.6.0",
+    "@biomejs/biome": "^2.5.2",
+    "@types/bun": "^1.3.13",
+    "typescript": "^6.0.3",
+    "valibot": "^1.2.0"
+  },
+  "prettier": {
+    "semi": false,
+    "printWidth": 120,
+    "trailingComma": "all"
+  },
+  "imports": {
+    "#result": "@adaptive-ds/result"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
