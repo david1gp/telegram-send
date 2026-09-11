@@ -6,7 +6,7 @@ type TelegramApiRequestSendOptions = Readonly<{
   botToken: string
   body: string | URLSearchParams | FormData
   fetch?: TelegramFetch
-  method: "sendMessage" | "sendDocument"
+  method: "getUpdates" | "sendMessage" | "sendDocument"
   signal?: AbortSignal
   timeoutMilliseconds: number
 }>

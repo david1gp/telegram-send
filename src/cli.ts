@@ -1,45 +1,17 @@
 #!/usr/bin/env bun
 
-import { buildApplication, buildCommand, type CommandContext, help, run, version } from "@stricli/core"
-import { telegramDocumentSend } from "./telegramDocumentSend.js"
-import { telegramMessageSend } from "./telegramMessageSend.js"
+import { buildApplication, buildCommand, type CommandContext, help, numberParser, run, version } from "@stricli/core"
+import { tgCommand } from "./tgCommand.js"
 
 type TgFlags = Readonly<{
   alert: boolean
   html: boolean
+  limit?: number
+  offset?: number
+  timeout?: number
 }>
 
 type TgContext = CommandContext
-
-function tgUsageError(message: string): Error {
-  return new Error(`tg: ${message}`)
-}
-
-async function tgCommand(this: TgContext, flags: TgFlags, ...inputs: readonly string[]): Promise<Error | undefined> {
-  if (inputs.length === 0) return tgUsageError("Usage: tg [--alert] [--html] MESSAGE")
-
-  const [mode, ...rest] = inputs
-  if (mode === "document" || mode === "sendDocument") {
-    const [file, ...caption] = rest
-    if (!file) return tgUsageError("Usage: tg [--alert] [--html] document FILE [CAPTION]")
-    const result = await telegramDocumentSend({
-      alert: flags.alert,
-      caption: caption.join(" "),
-      file,
-      html: flags.html,
-    })
-    if (!result.success) return new Error(`tg: ${result.errorMessage}`)
-    return
-  }
-
-  const result = await telegramMessageSend({
-    alert: flags.alert,
-    html: flags.html,
-    message: inputs.join(" "),
-  })
-  if (!result.success) return new Error(`tg: ${result.errorMessage}`)
-  return undefined
-}
 
 const tgCommandDefinition = buildCommand<TgFlags, readonly string[], TgContext>({
   func: tgCommand,
@@ -47,6 +19,27 @@ const tgCommandDefinition = buildCommand<TgFlags, readonly string[], TgContext>(
     flags: {
       alert: { kind: "boolean", brief: "Send with notifications enabled", withNegated: false },
       html: { kind: "boolean", brief: "Parse message or caption as HTML", withNegated: false },
+      limit: {
+        kind: "parsed",
+        parse: numberParser,
+        optional: true,
+        brief: "Maximum number of updates (1-100)",
+        placeholder: "COUNT",
+      },
+      offset: {
+        kind: "parsed",
+        parse: numberParser,
+        optional: true,
+        brief: "Identifier of the first update to return",
+        placeholder: "ID",
+      },
+      timeout: {
+        kind: "parsed",
+        parse: numberParser,
+        optional: true,
+        brief: "Long-poll timeout in seconds (0-50)",
+        placeholder: "SECONDS",
+      },
     },
     positional: {
       kind: "array",
@@ -59,8 +52,13 @@ const tgCommandDefinition = buildCommand<TgFlags, readonly string[], TgContext>(
     },
   },
   docs: {
-    brief: "Send a Telegram message or document",
-    customUsage: ["[--alert] [--html] MESSAGE", "[--alert] [--html] document FILE [CAPTION]"],
+    brief: "Send messages/documents or inspect Telegram updates",
+    customUsage: [
+      "[--alert] [--html] MESSAGE",
+      "[--alert] [--html] document FILE [CAPTION]",
+      "[--offset ID] [--limit COUNT] [--timeout SECONDS] getUpdates",
+      "[--offset ID] [--limit COUNT] [--timeout SECONDS] getChatId",
+    ],
   },
 })
 

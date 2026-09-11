@@ -54,6 +54,16 @@ tg --alert document ./build.log "Build output"
 
 `sendDocument` is accepted as an alias for `document`. `--alert` enables Telegram notifications; without it, messages and documents are sent silently. `--html` sets Telegram's `parse_mode` to `HTML`.
 
+Inspect pending updates with a bot token only:
+
+```sh
+tg getUpdates
+tg getUpdates --offset 123 --limit 20 --timeout 10
+tg getChatId --limit 100
+```
+
+`getUpdates` prints the JSON update array. `getChatId` prints unique chat IDs one per line, ordered by the newest update first, which makes its output convenient for shell use. These commands do not acknowledge or advance updates implicitly; use Telegram's `offset` deliberately when polling.
+
 ## `tg-timer`
 
 Wrap a scheduled command:
@@ -94,10 +104,13 @@ The package exports:
 
 - `telegramMessageSend` (`telegramSendMessage` alias)
 - `telegramDocumentSend` (`telegramSendDocument` alias)
+- `telegramUpdatesGet`
+- `telegramChatIdGet`
 - `telegramTimerRun`
 - `telegramConfigurationLoad` and `telegramConfigurationSchema`
 - `TelegramConfiguration`, `TelegramConfigurationLoadOptions`, `TelegramDocumentSendOptions`,
-  `TelegramMessageSendOptions`, `TelegramSendRuntimeOptions`, `TelegramTimerRunOptions`, and
+  `TelegramMessageSendOptions`, `TelegramUpdatesGetOptions`, `TelegramChatIdGetOptions`,
+  `TelegramUpdate`, `TelegramChatId`, `TelegramSendRuntimeOptions`, `TelegramTimerRunOptions`, and
   `TelegramTimerRunResult` (plus `TelegramEnvironment`, `TelegramFetch`, and `TelegramTimerOutput`)
 
 The async configuration, sending, and timer operations return a `Promise<Result<T>>` from `@adaptive-ds/result` rather than throwing expected configuration, file, network, or Telegram API failures:
@@ -119,6 +132,15 @@ if (!result.success) {
 ```
 
 Pass `configuration`, `env`, `envFile`, `fetch`, or `signal` through the runtime options when embedding the library. `telegramTimerRun` additionally accepts the command, job name, optional systemd unit, log file, output writers, and document-size limits.
+
+`telegramUpdatesGet()` requires only `botToken` and supports `offset`, `limit`, and long-poll `timeout` options. `telegramChatIdGet()` uses the same options, sorts returned updates newest first, keeps the first occurrence of each chat ID, and returns the resulting IDs without acknowledging any update:
+
+```ts
+import { telegramChatIdGet, telegramUpdatesGet } from "@adaptive-ds/telegram-send"
+
+const updates = await telegramUpdatesGet({ configuration: { botToken: "123456:replace-me" }, limit: 20 })
+const chatIds = await telegramChatIdGet({ configuration: { botToken: "123456:replace-me" } })
+```
 
 ## Failure behavior
 

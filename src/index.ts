@@ -1,4 +1,12 @@
 export {
+  type TelegramBotConfiguration,
+  telegramBotConfigurationSchema,
+} from "./telegramBotConfigurationSchema.js"
+export {
+  type TelegramChatIdGetOptions,
+  telegramChatIdGet,
+} from "./telegramChatIdGet.js"
+export {
   type TelegramConfigurationLoadOptions,
   type TelegramEnvironment,
   telegramConfigurationLoad,
@@ -21,9 +29,18 @@ export type {
   TelegramFetch,
   TelegramSendRuntimeOptions,
 } from "./telegramSendRuntimeOptions.js"
-export { telegramTimerRun } from "./telegramTimerRun.js"
 export type {
   TelegramTimerOutput,
   TelegramTimerRunOptions,
   TelegramTimerRunResult,
 } from "./telegramTimerRun.js"
+export { telegramTimerRun } from "./telegramTimerRun.js"
+export {
+  type TelegramCallbackQuery,
+  type TelegramChat,
+  type TelegramChatId,
+  type TelegramMessage,
+  type TelegramUpdate,
+  type TelegramUpdatesGetOptions,
+  telegramUpdatesGet,
+} from "./telegramUpdatesGet.js"

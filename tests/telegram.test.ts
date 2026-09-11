@@ -87,6 +87,19 @@ test("file values override the environment and default values remain available",
   expect(overrideResult).toEqual({ success: true, data: { botToken: "from-file", chatId: "file-chat" } })
 })
 
+test("loads token-only configuration without weakening send configuration requirements", async () => {
+  const readFile = async () => "TELEGRAM_BOT_TOKEN=token\n"
+  const tokenOnlyResult = await telegramConfigurationLoad({ chatIdRequired: false, envFile: "token.env", readFile })
+  const sendResult = await telegramConfigurationLoad({ envFile: "token.env", readFile })
+
+  expect(tokenOnlyResult).toEqual({ success: true, data: { botToken: "token" } })
+  expect(sendResult).toEqual({
+    success: false,
+    op: "telegramConfigurationLoad",
+    errorMessage: "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required in token.env",
+  })
+})
+
 test("returns Telegram API failures as Result errors", async () => {
   const result = await telegramMessageSend({
     configuration: { botToken: "token", chatId: "chat" },

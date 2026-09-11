@@ -17,4 +17,4 @@ Establish package/configuration, implement sending, implement timer wrapping, do
 2. Complete: Implement Telegram sending library and Stricli `tg` CLI with Bun tests.
 3. Complete: Implement timer library and Stricli `tg-timer` CLI with Bun tests.
 4. Complete: Write README and verify integration, formatting, type checks, tests, build, package contents, and real `david-server` Telegram notification formatting.
-5. In progress: Initialize Git, create initial semantic commit, create public GitHub repository and push.
+5. Complete: Initialize Git, create initial semantic commit, create public GitHub repository and push.

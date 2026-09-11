@@ -4,10 +4,13 @@ import { join } from "node:path"
 import * as v from "valibot"
 import type { Result } from "#result"
 import { createResult, createResultError } from "#result"
+import type { TelegramBotConfiguration } from "./telegramBotConfigurationSchema.js"
+import { telegramBotConfigurationSchema } from "./telegramBotConfigurationSchema.js"
 import { type TelegramConfiguration, telegramConfigurationSchema } from "./telegramConfigurationSchema.js"
 
 type TelegramEnvironment = Readonly<Record<string, string | undefined>>
 type TelegramConfigurationLoadOptions = Readonly<{
+  chatIdRequired?: boolean
   env?: TelegramEnvironment
   envFile?: string
   readFile?: (path: string, encoding: "utf8") => Promise<string>
@@ -44,9 +47,15 @@ function telegramEnvironmentFilePathResolve(env: TelegramEnvironment, envFile?: 
   return join(env.HOME ?? homedir(), ".config", "timers", "telegram.env")
 }
 
+function telegramConfigurationLoad(
+  options?: TelegramConfigurationLoadOptions & Readonly<{ chatIdRequired?: true }>,
+): Promise<Result<TelegramConfiguration>>
+function telegramConfigurationLoad(
+  options: TelegramConfigurationLoadOptions & Readonly<{ chatIdRequired: false }>,
+): Promise<Result<TelegramBotConfiguration>>
 async function telegramConfigurationLoad(
   options: TelegramConfigurationLoadOptions = {},
-): Promise<Result<TelegramConfiguration>> {
+): Promise<Result<TelegramConfiguration | TelegramBotConfiguration>> {
   const op = "telegramConfigurationLoad"
   const env = options.env ?? process.env
   const envFile = telegramEnvironmentFilePathResolve(env, options.envFile)
@@ -58,11 +67,16 @@ async function telegramConfigurationLoad(
   }
 
   const fileValues = telegramEnvironmentFileParse(fileText)
-  const parsed = v.safeParse(telegramConfigurationSchema, {
+  const values = {
     botToken: fileValues.TELEGRAM_BOT_TOKEN ?? env.TELEGRAM_BOT_TOKEN,
     chatId: fileValues.TELEGRAM_CHAT_ID ?? env.TELEGRAM_CHAT_ID,
-  })
+  }
+  const parsed =
+    options.chatIdRequired === false
+      ? v.safeParse(telegramBotConfigurationSchema, values)
+      : v.safeParse(telegramConfigurationSchema, values)
   if (!parsed.success) {
+    if (options.chatIdRequired === false) return createResultError(op, `TELEGRAM_BOT_TOKEN is required in ${envFile}`)
     return createResultError(op, `TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required in ${envFile}`)
   }
   return createResult(parsed.output)
