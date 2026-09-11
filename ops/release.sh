@@ -5,16 +5,6 @@ changelogs_dir="changelogs"
 package_json="package.json"
 repository="david1gp/telegram-send"
 
-if ! command -v gh >/dev/null 2>&1; then
-  printf 'Error: GitHub CLI is not installed or unavailable.\n' >&2
-  exit 1
-fi
-
-if ! gh auth status --hostname github.com >/dev/null 2>&1; then
-  printf 'Error: GitHub CLI is not authenticated for github.com.\n' >&2
-  exit 1
-fi
-
 if [[ $# -gt 1 ]]; then
   printf 'Error: provide zero or one argument for the next version.\n' >&2
   exit 1
@@ -25,6 +15,16 @@ changelog_body="$(git cliff --unreleased --strip all | sed '1{/^## \[unreleased\
 
 if [[ -z "$changelog_body" || "$changelog_body" == *"No commits found"* ]]; then
   printf 'No new commits since the last release.\n' >&2
+  exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  printf 'Error: GitHub CLI is not installed or unavailable.\n' >&2
+  exit 1
+fi
+
+if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+  printf 'Error: GitHub CLI is not authenticated for github.com.\n' >&2
   exit 1
 fi
 
