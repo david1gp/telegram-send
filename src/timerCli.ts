@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 
 import { buildApplication, buildCommand, type CommandContext, help, run, version } from "@stricli/core"
+import { packageVersion } from "./packageVersion.js"
+import { telegramSendVersionMetadataRender } from "./telegramSendVersionMetadataRender.js"
 import { telegramTimerRun } from "./telegramTimerRun.js"
 
 type TimerFlags = Readonly<{
@@ -86,7 +88,7 @@ const timerApplication = buildApplication(
       brief: "Print help information and exit",
       formatting: { caseStyle: "convert-camel-to-kebab", onlyRequiredInUsageLine: false, useAliasInUsageLine: false },
     }),
-    version: version({ brief: "Print version information and exit", info: { currentVersion: "0.1.0" } }),
+    version: version({ brief: "Print version information and exit", info: { currentVersion: packageVersion } }),
   },
 )
 
@@ -111,4 +113,11 @@ const applicationProcess = {
   },
 }
 
-await run(timerApplication, process.argv.slice(2), { process: applicationProcess })
+const args = process.argv.slice(2)
+const verboseVersion = args.includes("--verbose") && (args.includes("--version") || args[0] === "version")
+
+if (verboseVersion) {
+  process.stdout.write(telegramSendVersionMetadataRender("tg-timer"))
+} else {
+  await run(timerApplication, args, { process: applicationProcess })
+}

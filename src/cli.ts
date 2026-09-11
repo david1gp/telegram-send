@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 
 import { buildApplication, buildCommand, type CommandContext, help, numberParser, run, version } from "@stricli/core"
+import { packageVersion } from "./packageVersion.js"
+import { telegramSendVersionMetadataRender } from "./telegramSendVersionMetadataRender.js"
 import { tgCommand } from "./tgCommand.js"
 
 type TgFlags = Readonly<{
@@ -79,7 +81,7 @@ const tgApplication = buildApplication(
     }),
     version: version({
       brief: "Print version information and exit",
-      info: { currentVersion: "0.1.0" },
+      info: { currentVersion: packageVersion },
     }),
   },
 )
@@ -105,4 +107,11 @@ const applicationProcess = {
   },
 }
 
-await run(tgApplication, process.argv.slice(2), { process: applicationProcess })
+const args = process.argv.slice(2)
+const verboseVersion = args.includes("--verbose") && (args.includes("--version") || args[0] === "version")
+
+if (verboseVersion) {
+  process.stdout.write(telegramSendVersionMetadataRender("tg"))
+} else {
+  await run(tgApplication, args, { process: applicationProcess })
+}
