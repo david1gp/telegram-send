@@ -3,7 +3,7 @@ Create `@adaptive-ds/telegram-send`: a Bun/TypeScript CLI and library replacing 
 
 # Decisions
 - Use `@stricli/core` for CLI parsing and follow the code-style skill.
-- Preserve the existing message/document, environment configuration, silent/alert, HTML, and timer notification behavior from `/home/david/leo/leo-server/linux_timers/shared/telegram`.
+- Preserve the existing message/document, environment configuration, silent/alert, HTML, and timer notification behavior from `/home/david/leo_internal/dev-servers/leo-server/timers/shared/telegram`.
 - Use `/home/david/adaptive/forgejo-cli` as the configuration and automation template.
 - Repository: `david1gp/telegram-send`; package: `@adaptive-ds/telegram-send`.
 - Prefer existing sibling dependencies and Bun APIs.
