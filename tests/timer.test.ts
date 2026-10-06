@@ -116,6 +116,84 @@ test("summarizes changed packages with their names and classifications in HTML a
   expect(captions[1]).not.toContain("<b>")
 })
 
+test("formats repository update counts as categorized details without counts in the heading", async () => {
+  const directory = await testDirectory()
+  const captions: string[] = []
+  const times = [new Date(0), new Date(125_000)]
+  const result = await telegramTimerRun({
+    command: commandFor(
+      [
+        "console.log('== summary: created=0 updated=5 unchanged=23')",
+        "console.log('updated: x y z')",
+        "console.log('unchanged: a b')",
+        "console.log('UPDATE_APPLIED=1')",
+      ].join("; "),
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      captions.push(String((init?.body as FormData).get("caption")))
+      return captions.length === 1
+        ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "opensource_update",
+    now: () => times.shift() ?? new Date(125_000),
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(captions[0]).toContain("<b>opensource_update</b>: in 125s ✅")
+  expect(captions[0]).toContain("* 5 updated: x, y, z")
+  expect(captions[0]).toContain("* 23 unchanged")
+  expect(captions[0]?.split("<pre>")[0]).not.toContain("created=0")
+  expect(captions[1]).toContain("opensource_update: in 125s ✅")
+  expect(captions[1]).toContain("* 5 updated: x, y, z")
+  expect(captions[1]).toContain("* 23 unchanged")
+})
+
+test("does not notify a marked successful repository summary when every count is zero", async () => {
+  const directory = await testDirectory()
+  let fetchCalls = 0
+  const result = await telegramTimerRun({
+    command: commandFor("console.log('== summary: created=0 updated=0 unchanged=0'); console.log('UPDATE_APPLIED=1')"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async () => {
+      fetchCalls += 1
+      return new Response(JSON.stringify({ ok: true }))
+    },
+    name: "leo_customers_update",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.notificationAttempted).toBe(false)
+  expect(fetchCalls).toBe(0)
+})
+
+test("alerts on command failure even when its repository summary counts are all zero", async () => {
+  const directory = await testDirectory()
+  let fetchCalls = 0
+  const result = await telegramTimerRun({
+    command: commandFor(
+      "console.log('== summary: created=0 updated=0 unchanged=0'); console.log('UPDATE_APPLIED=1'); process.exit(1)",
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async () => {
+      fetchCalls += 1
+      return new Response(JSON.stringify({ ok: true }))
+    },
+    name: "leo_customers_update",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.notificationAttempted).toBe(true)
+  expect(fetchCalls).toBe(1)
+})
+
 test("preserves the legacy single-updater summary", async () => {
   const directory = await testDirectory()
   let caption = ""

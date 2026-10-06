@@ -72,8 +72,11 @@ function timerCaptionSelect(fullCaption: string, detailsCaption: string, header:
   return header
 }
 
-function timerSummaryFind(stdout: string, exitCode: number): Readonly<{ details: readonly string[]; text: string }> {
-  if (exitCode !== 0) return { details: [], text: "" }
+function timerSummaryFind(
+  stdout: string,
+  exitCode: number,
+): Readonly<{ details: readonly string[]; text: string; repositorySummary: boolean; allCountsZero: boolean }> {
+  if (exitCode !== 0) return { details: [], text: "", repositorySummary: false, allCountsZero: false }
   const lines = stdout.split(/\r?\n/)
   const classifiedPackageNames = new Set<string>()
   const packageUpdates: string[] = []
@@ -92,19 +95,59 @@ function timerSummaryFind(stdout: string, exitCode: number): Readonly<{ details:
     return {
       details: packageUpdates,
       text: `${packageCount} package${packageCount === 1 ? "" : "s"} updated`,
+      repositorySummary: false,
+      allCountsZero: false,
+    }
+  }
+  const repositorySummaryLine = lines.find((line) =>
+    /^== summary:\s*created=\d+\s+updated=\d+\s+unchanged=\d+\s*$/.test(line),
+  )
+  if (repositorySummaryLine) {
+    const counts = repositorySummaryLine.match(/created=(\d+)\s+updated=(\d+)\s+unchanged=(\d+)/)
+    if (counts?.[1] && counts[2] && counts[3]) {
+      const createdCount = Number(counts[1])
+      const updatedCount = Number(counts[2])
+      const unchangedCount = Number(counts[3])
+      const categoryDetails: string[] = []
+      for (const category of ["created", "updated", "unchanged"] as const) {
+        const count = category === "created" ? createdCount : category === "updated" ? updatedCount : unchangedCount
+        if (count === 0) continue
+        const listLine = lines.find((line) => line.startsWith(`${category}:`))
+        const names =
+          listLine
+            ?.slice(category.length + 1)
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean) ?? []
+        if (category === "updated" && names.length > 0) {
+          categoryDetails.push(`* ${count} updated: ${names.join(", ")}`)
+          continue
+        }
+        if (category === "created" && names.length > 0) {
+          categoryDetails.push(`* ${count} created: ${names.join(", ")}`)
+          continue
+        }
+        categoryDetails.push(`* ${count} ${category}`)
+      }
+      return {
+        details: categoryDetails,
+        text: "",
+        repositorySummary: true,
+        allCountsZero: createdCount === 0 && updatedCount === 0 && unchangedCount === 0,
+      }
     }
   }
   for (const line of lines) {
     const classified = line.match(/^\s*-\s+([^:]+):\s*\S+\s*->\s*\S+,\s*.+?\s*$/)
     if (classified?.[1] && classifiedPackageNames.has(classified[1].trim())) continue
     const update = line.match(/^\s*-\s+[^:]+:\s*(.* -> .*)\s*$/)
-    if (update?.[1]) return { details: [], text: update[1] }
+    if (update?.[1]) return { details: [], text: update[1], repositorySummary: false, allCountsZero: false }
     const state = line.match(/^\s*-\s+[^:]+:\s*((?:updated|unchanged)(?: \(.*\))?)\s*$/)
-    if (state?.[1]) return { details: [], text: state[1] }
+    if (state?.[1]) return { details: [], text: state[1], repositorySummary: false, allCountsZero: false }
     const summary = line.match(/^== summary:\s*(.*)$/)
-    if (summary?.[1]) return { details: [], text: summary[1] }
+    if (summary?.[1]) return { details: [], text: summary[1], repositorySummary: false, allCountsZero: false }
   }
-  return { details: [], text: "" }
+  return { details: [], text: "", repositorySummary: false, allCountsZero: false }
 }
 
 function timerDateFormat(date: Date): string {
@@ -237,12 +280,16 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const status = exitCode === 0 ? "✅" : "❌"
     const result = exitCode === 0 ? "ok" : "failed"
     const prefix = env.TG_TIMER_PREFIX ?? ""
-    const htmlHeader = summary.text
-      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
-      : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
-    const plainHeader = summary.text
-      ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
-      : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
+    const htmlHeader = summary.repositorySummary
+      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
+      : summary.text
+        ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
+        : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
+    const plainHeader = summary.repositorySummary
+      ? `${prefix}${options.name}: in ${duration}s ${status}`
+      : summary.text
+        ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
+        : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
     const htmlDetails = summary.details.map((line) => timerHtmlEscape(line)).join("\n")
     const plainDetails = summary.details.join("\n")
     const cardLines = [
@@ -326,7 +373,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
       stderr.write(`tg-timer: summary:\n${plainCaption}\n`)
     }
     const updateApplied = stdoutText.split(/\r?\n/).some((line) => line === "UPDATE_APPLIED=1")
-    const notificationAttempted = exitCode !== 0 || updateApplied
+    const notificationAttempted = exitCode !== 0 || (updateApplied && !summary.allCountsZero)
     if (!notificationAttempted) {
       if (env.TG_TIMER_DEBUG === "1") stderr.write("tg-timer: skipping Telegram (success without UPDATE_APPLIED=1)\n")
       return createResult({ exitCode, lastLogFile, notificationAttempted, notified: false })
