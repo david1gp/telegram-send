@@ -74,6 +74,156 @@ test("retries a failed HTML caption as plain text without changing the command s
   expect(captions[1]).toContain("updated job: ok")
 })
 
+test("summarizes changed packages with their names and classifications in HTML and plain captions", async () => {
+  const directory = await testDirectory()
+  const captions: string[] = []
+  const times = [new Date(0), new Date(8_000)]
+  const result = await telegramTimerRun({
+    command: commandFor(
+      [
+        "console.log('- vite: 8.3.2 -> 8.3.3, patch')",
+        "console.log('- esbuild: 0.25.0 -> 0.25.1, minor')",
+        "console.log('- bun: 1.4.2 -> 1.4.2, unchanged')",
+        "console.log('UPDATE_APPLIED=1')",
+      ].join("; "),
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      const body = init?.body as FormData
+      captions.push(String(body.get("caption")))
+      return captions.length === 1
+        ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "bun_update_global",
+    now: () => times.shift() ?? new Date(8_000),
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(0)
+  expect(captions).toHaveLength(2)
+  expect(captions[0]).toContain("<b>bun_update_global</b>: 2 packages updated in 8s ✅")
+  expect(captions[0]).toContain("- vite: 8.3.2 -&gt; 8.3.3, patch")
+  expect(captions[0]).toContain("- esbuild: 0.25.0 -&gt; 0.25.1, minor")
+  expect(captions[0]?.split("<pre>")[0]).not.toContain("- bun:")
+  expect(captions[1]).toContain("bun_update_global: 2 packages updated in 8s ✅")
+  expect(captions[1]).toContain("- vite: 8.3.2 -> 8.3.3, patch")
+  expect(captions[1]).toContain("- esbuild: 0.25.0 -> 0.25.1, minor")
+  expect(captions[1]?.split("\njob:")[0]).not.toContain("- bun:")
+  expect(captions[0]).toContain("<b>bun_update_global</b>")
+  expect(captions[1]).not.toContain("<b>")
+})
+
+test("preserves the legacy single-updater summary", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("console.log('- cache: 1.0 -> 2.0'); console.log('UPDATE_APPLIED=1')"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      caption = String((init?.body as FormData).get("caption"))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "legacy updater",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("<b>legacy updater</b>: 1.0 -&gt; 2.0 in")
+  expect(caption).not.toContain("packages updated")
+})
+
+test("keeps all 21 shared-policy package details when caption metadata exceeds the limit", async () => {
+  const directory = await testDirectory()
+  const packageNames = [
+    "svgo",
+    "vite",
+    "@rsbuild/core",
+    "@adaptive-ds/forgejo-cli",
+    "@adaptive-ds/project-registry",
+    "@adaptive-ds/zitadel-cli",
+    "@adaptive-ds/telegram-send",
+    "@adaptive-ds/result",
+    "valibot",
+    "david1gp/codex-imagen",
+    "mmx-cli",
+    "ctx7@latest",
+    "@biomejs/biome",
+    "prettier",
+    "wrangler",
+    "typescript",
+    "agent-browser",
+    "playwright",
+    "@bitwarden/cli@2024.12.0",
+    "t3@latest",
+    "@earendil-works/pi-coding-agent",
+  ]
+  const outputLines = packageNames.map((name) => `console.log(${JSON.stringify(`- ${name}: 1 -> 2, patch`)})`)
+  outputLines.push("console.log('UPDATE_APPLIED=1')")
+  const captions: string[] = []
+  const times = [new Date(0), new Date(8_000)]
+  const result = await telegramTimerRun({
+    command: commandFor(outputLines.join("; ")),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, HOSTNAME: "h".repeat(700), XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      captions.push(String((init?.body as FormData).get("caption")))
+      return captions.length === 1
+        ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "bun_update_global",
+    now: () => times.shift() ?? new Date(8_000),
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(0)
+  expect(captions).toHaveLength(2)
+  expect(captions[0]?.length).toBeLessThanOrEqual(1024)
+  expect(captions[0]).toContain("21 packages updated in 8s")
+  expect(captions[0]).not.toContain("<pre>")
+  expect(captions[1]?.length).toBeLessThanOrEqual(1024)
+  expect(captions[1]).toContain("21 packages updated in 8s")
+  expect(captions[1]).not.toContain("\njob:")
+  for (const name of packageNames) {
+    expect(captions[0]).toContain(`- ${name}: 1 -&gt; 2, patch`)
+    expect(captions[1]).toContain(`- ${name}: 1 -> 2, patch`)
+  }
+})
+
+test("does not promote unchanged classified packages and deduplicates repeated package details", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor(
+      [
+        "console.log('- vite: 1.0.0 -> 2.0.0, patch')",
+        "console.log('- vite: 1.0.0 -> 2.0.0, patch')",
+        "console.log('- bun: 1.4.2 -> 1.4.2, unchanged')",
+        "console.log('- bun: 1.4.2 -> 1.4.2, unchanged')",
+        "console.log('UPDATE_APPLIED=1')",
+      ].join("; "),
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      caption = String((init?.body as FormData).get("caption"))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "bun_update_global",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("1 package updated")
+  const summary = caption.split("<pre>")[0] ?? caption
+  expect(summary.match(/- vite:/g)).toHaveLength(1)
+  expect(summary).not.toContain("- bun:")
+  expect(summary).not.toContain("1.4.2 -> 1.4.2")
+})
+
 test("does not notify a successful no-op and rotates ten last-run snapshots", async () => {
   const directory = await testDirectory()
   const logDirectory = join(directory, ".config", "timers", "logs")

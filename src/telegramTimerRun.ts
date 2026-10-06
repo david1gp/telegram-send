@@ -66,17 +66,45 @@ function timerSafeName(name: string): string {
   return name.replace(/[^A-Za-z0-9._-]/g, "_")
 }
 
-function timerSummaryFind(stdout: string, exitCode: number): string {
-  if (exitCode !== 0) return ""
-  for (const line of stdout.split(/\r?\n/)) {
-    const update = line.match(/^\s*-\s+[^:]+:\s*(.* -> .*)\s*$/)
-    if (update?.[1]) return update[1]
-    const state = line.match(/^\s*-\s+[^:]+:\s*((?:updated|unchanged)(?: \(.*\))?)\s*$/)
-    if (state?.[1]) return state[1]
-    const summary = line.match(/^== summary:\s*(.*)$/)
-    if (summary?.[1]) return summary[1]
+function timerCaptionSelect(fullCaption: string, detailsCaption: string, header: string): string {
+  if (fullCaption.length <= 1024) return fullCaption
+  if (detailsCaption.length <= 1024) return detailsCaption
+  return header
+}
+
+function timerSummaryFind(stdout: string, exitCode: number): Readonly<{ details: readonly string[]; text: string }> {
+  if (exitCode !== 0) return { details: [], text: "" }
+  const lines = stdout.split(/\r?\n/)
+  const classifiedPackageNames = new Set<string>()
+  const packageUpdates: string[] = []
+  const updatedPackageNames = new Set<string>()
+  for (const line of lines) {
+    const update = line.match(/^\s*-\s+([^:]+):\s*(\S+)\s*->\s*(\S+),\s*(.+?)\s*$/)
+    if (!update?.[1] || !update[2] || !update[3] || !update[4]) continue
+    const packageName = update[1].trim()
+    classifiedPackageNames.add(packageName)
+    if (update[2] === update[3] || updatedPackageNames.has(packageName)) continue
+    updatedPackageNames.add(packageName)
+    packageUpdates.push(`- ${packageName}: ${update[2]} -> ${update[3]}, ${update[4]}`)
   }
-  return ""
+  if (packageUpdates.length > 0) {
+    const packageCount = packageUpdates.length
+    return {
+      details: packageUpdates,
+      text: `${packageCount} package${packageCount === 1 ? "" : "s"} updated`,
+    }
+  }
+  for (const line of lines) {
+    const classified = line.match(/^\s*-\s+([^:]+):\s*\S+\s*->\s*\S+,\s*.+?\s*$/)
+    if (classified?.[1] && classifiedPackageNames.has(classified[1].trim())) continue
+    const update = line.match(/^\s*-\s+[^:]+:\s*(.* -> .*)\s*$/)
+    if (update?.[1]) return { details: [], text: update[1] }
+    const state = line.match(/^\s*-\s+[^:]+:\s*((?:updated|unchanged)(?: \(.*\))?)\s*$/)
+    if (state?.[1]) return { details: [], text: state[1] }
+    const summary = line.match(/^== summary:\s*(.*)$/)
+    if (summary?.[1]) return { details: [], text: summary[1] }
+  }
+  return { details: [], text: "" }
 }
 
 function timerDateFormat(date: Date): string {
@@ -209,12 +237,14 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const status = exitCode === 0 ? "✅" : "❌"
     const result = exitCode === 0 ? "ok" : "failed"
     const prefix = env.TG_TIMER_PREFIX ?? ""
-    const htmlHeader = summary
-      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary)} in ${duration}s ${status}`
+    const htmlHeader = summary.text
+      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
       : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
-    const plainHeader = summary
-      ? `${prefix}${options.name}: ${summary} in ${duration}s ${status}`
+    const plainHeader = summary.text
+      ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
       : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
+    const htmlDetails = summary.details.map((line) => timerHtmlEscape(line)).join("\n")
+    const plainDetails = summary.details.join("\n")
     const cardLines = [
       `job: ${timerHtmlEscape(options.name)}`,
       `host: ${timerHtmlEscape(host)}`,
@@ -235,8 +265,10 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
       cardLines.push(`log: ${timerHtmlEscape(options.logFile)}`)
       plainLines.push(`log: ${options.logFile}`)
     }
-    const htmlCaption = `${htmlHeader}\n<pre>${cardLines.join("\n")}</pre>`
-    const plainCaption = `${plainHeader}\n${plainLines.join("\n")}`
+    const htmlCaption = `${htmlHeader}${htmlDetails ? `\n${htmlDetails}` : ""}\n<pre>${cardLines.join("\n")}</pre>`
+    const plainCaption = `${plainHeader}${plainDetails ? `\n${plainDetails}` : ""}\n${plainLines.join("\n")}`
+    const htmlDetailsCaption = `${htmlHeader}${htmlDetails ? `\n${htmlDetails}` : ""}`
+    const plainDetailsCaption = `${plainHeader}${plainDetails ? `\n${plainDetails}` : ""}`
     const documentParts = [
       Buffer.from("=== stdout ===\n"),
       stdoutContents,
@@ -306,7 +338,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const alert = exitCode !== 0
     const htmlResult = await telegramDocumentSend({
       alert,
-      caption: htmlCaption.length > 1024 ? htmlHeader : htmlCaption,
+      caption: timerCaptionSelect(htmlCaption, htmlDetailsCaption, htmlHeader),
       configuration: options.configuration,
       env: options.env,
       envFile: options.envFile,
@@ -322,7 +354,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     stderr.write("tg-timer: HTML document caption failed; retrying as plain text\n")
     const plainResult = await telegramDocumentSend({
       alert,
-      caption: plainCaption.length > 1024 ? plainHeader : plainCaption,
+      caption: timerCaptionSelect(plainCaption, plainDetailsCaption, plainHeader),
       configuration: options.configuration,
       env: options.env,
       envFile: options.envFile,
