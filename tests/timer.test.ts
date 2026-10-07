@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { telegramTimerRun } from "../src/index.js"
+import { telegramTimerRun, telegramTimerSummaryParse, telegramTimerSummaryRender } from "../src/index.js"
 
 const temporaryDirectories: string[] = []
 
@@ -19,6 +19,23 @@ async function testDirectory(): Promise<string> {
 function commandFor(script: string): readonly string[] {
   return [process.execPath, "-e", script]
 }
+
+test("ignores malformed structured metadata and unsafe URLs without throwing", () => {
+  expect(telegramTimerSummaryParse("UPDATE_SUMMARY={bad json}")).toBeUndefined()
+  expect(
+    telegramTimerSummaryParse('UPDATE_SUMMARY={"items":[{"name":"only batch item","to":"1"}]}')?.items,
+  ).toHaveLength(1)
+  const summary = telegramTimerSummaryParse(
+    'UPDATE_SUMMARY={"name":"<release>","releaseUrl":"file:///etc/passwd","items":[null,{"name":"pkg","to":"2","releaseUrl":"https://example.com/r"}]}',
+  )
+  expect(summary).toBeDefined()
+  if (!summary) return
+  const rendered = telegramTimerSummaryRender(summary)
+  expect(rendered.title).toBe("<release>")
+  expect(rendered.titleHtml).toBe("&lt;release&gt;")
+  expect(rendered.detailsHtml).not.toContain("file:")
+  expect(rendered.detailsHtml).toContain('href="https://example.com/r"')
+})
 
 test("streams command output, preserves failure status, and alerts with a document", async () => {
   const directory = await testDirectory()
@@ -213,6 +230,94 @@ test("preserves the legacy single-updater summary", async () => {
   expect(caption).not.toContain("packages updated")
 })
 
+test("renders structured single-update versions and labeled safe links in HTML and plain fallback", async () => {
+  const directory = await testDirectory()
+  const captions: string[] = []
+  const result = await telegramTimerRun({
+    command: commandFor(
+      `console.log(${JSON.stringify('UPDATE_SUMMARY={"name":"Bun <stable>","from":"1.2&","to":"1.3","releaseUrl":"https://example.com/releases/1.3?a=1&b=2","changelogUrl":"javascript:alert(1)","compareUrl":"https://example.com/compare/1.2...1.3"}')}); console.log('UPDATE_APPLIED=1')`,
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      captions.push(String((init?.body as FormData).get("caption")))
+      return captions.length === 1
+        ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "bun updater",
+  })
+
+  expect(result.success).toBe(true)
+  expect(captions).toHaveLength(2)
+  expect(captions[0]).toContain("<b>Bun &lt;stable&gt;</b>")
+  expect(captions[0]).toContain("1.2&amp; -&gt; 1.3")
+  expect(captions[0]).toContain('<a href="https://example.com/releases/1.3?a=1&amp;b=2">Release</a>')
+  expect(captions[0]).toContain('<a href="https://example.com/compare/1.2...1.3">Changes</a>')
+  expect(captions[0]?.split("<pre>")[0]).not.toContain("javascript:")
+  expect(captions[1]).toContain("bun updater: Bun <stable> in")
+  expect(captions[1]).toContain("1.2& -> 1.3")
+  expect(captions[1]).toContain("Release: https://example.com/releases/1.3?a=1&b=2")
+  expect(captions[1]?.split("\njob:")[0]).not.toContain("javascript:")
+})
+
+test("renders structured batch entries compactly and suppresses metadata-only successful no-ops", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const changed = await telegramTimerRun({
+    command: commandFor(
+      `console.log(${JSON.stringify('UPDATE_SUMMARY={"name":"System updates","items":[{"name":"openssl","from":"3.0","to":"3.1","changelogUrl":"https://example.com/openssl"},{"name":"curl","from":"8.0","to":"8.1","releaseUrl":"https://example.com/curl"}]}')}); console.log('UPDATE_APPLIED=1')`,
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      caption = String((init?.body as FormData).get("caption"))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "system update",
+  })
+  expect(changed.success).toBe(true)
+  expect(caption).toContain("<b>System updates</b>")
+  expect(caption).toContain("openssl: 3.0 -&gt; 3.1")
+  expect(caption).toContain("curl: 8.0 -&gt; 8.1")
+  expect(caption).toContain(">Changelog</a>")
+  expect(caption).toContain(">Release</a>")
+
+  let fetchCalls = 0
+  const noOp = await telegramTimerRun({
+    command: commandFor(`console.log('UPDATE_SUMMARY={"name":"no-op","releaseUrl":"https://example.com"}')`),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async () => {
+      fetchCalls += 1
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "no-op",
+  })
+  expect(noOp.success).toBe(true)
+  if (noOp.success) expect(noOp.data.notificationAttempted).toBe(false)
+  expect(fetchCalls).toBe(0)
+})
+
+test("keeps structured failure reports useful without links or versions", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor(`console.log('UPDATE_SUMMARY={"name":"Registry refresh"}'); process.exit(9)`),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      caption = String((init?.body as FormData).get("caption"))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "registry updater",
+  })
+  expect(result.success).toBe(true)
+  expect(caption).toContain("<b>Registry refresh</b> in")
+  expect(caption).toContain("❌")
+  expect(caption).toContain("exit: 9")
+})
+
 test("keeps all 21 shared-policy package details when caption metadata exceeds the limit", async () => {
   const directory = await testDirectory()
   const packageNames = [
@@ -270,6 +375,35 @@ test("keeps all 21 shared-policy package details when caption metadata exceeds t
     expect(captions[0]).toContain(`- ${name}: 1 -&gt; 2, patch`)
     expect(captions[1]).toContain(`- ${name}: 1 -> 2, patch`)
   }
+})
+
+test("bounds the header fallback for oversized job, prefix, and structured title values", async () => {
+  const directory = await testDirectory()
+  const captions: string[] = []
+  const output = `UPDATE_SUMMARY=${JSON.stringify({ name: "<title>&".repeat(300), to: "2" })}\nUPDATE_APPLIED=1`
+  const result = await telegramTimerRun({
+    command: commandFor(`console.log(${JSON.stringify(output)})`),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: {
+      HOME: directory,
+      TG_TIMER_PREFIX: "<b>prefix & </b>".repeat(300),
+      XDG_CONFIG_HOME: directory,
+    },
+    fetch: async (_input, init) => {
+      captions.push(String((init?.body as FormData).get("caption")))
+      return captions.length === 1
+        ? new Response(JSON.stringify({ ok: false, description: "retry as plain" }), { status: 400 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "<job>&".repeat(30),
+  })
+
+  expect(result.success).toBe(true)
+  expect(captions).toHaveLength(2)
+  expect(captions[0]?.length).toBeLessThanOrEqual(1024)
+  expect(captions[1]?.length).toBeLessThanOrEqual(1024)
+  expect(captions[0]).toBe("Timer report")
+  expect(captions[1]).toBe("Timer report")
 })
 
 test("does not promote unchanged classified packages and deduplicates repeated package details", async () => {
