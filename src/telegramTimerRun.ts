@@ -7,6 +7,8 @@ import type { Result } from "#result"
 import { createResult, createResultError } from "#result"
 import { telegramDocumentSend } from "./telegramDocumentSend.js"
 import type { TelegramSendRuntimeOptions } from "./telegramSendRuntimeOptions.js"
+import { telegramTimerSummaryParse } from "./telegramTimerSummaryParse.js"
+import { telegramTimerSummaryRender } from "./telegramTimerSummaryRender.js"
 
 const defaultMaxLogFileBytes = 200_000
 const defaultMaxDocumentBytes = 45 * 1024 * 1024
@@ -69,7 +71,8 @@ function timerSafeName(name: string): string {
 function timerCaptionSelect(fullCaption: string, detailsCaption: string, header: string): string {
   if (fullCaption.length <= 1024) return fullCaption
   if (detailsCaption.length <= 1024) return detailsCaption
-  return header
+  if (header.length <= 1024) return header
+  return "Timer report"
 }
 
 function timerSummaryFind(
@@ -274,24 +277,30 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const stderrContents = await readFile(stderrCapture.file)
     const stdoutText = stdoutContents.toString()
     const summary = timerSummaryFind(stdoutText, exitCode)
+    const structuredSummary = telegramTimerSummaryParse(stdoutText)
+    const structuredReport = structuredSummary ? telegramTimerSummaryRender(structuredSummary) : undefined
     const host = env.TG_TIMER_HOST || env.HOSTNAME || hostname()
     const unit = options.unit ?? "not supplied"
     const displayCommand = timerCommandDisplay(options.command)
     const status = exitCode === 0 ? "✅" : "❌"
     const result = exitCode === 0 ? "ok" : "failed"
     const prefix = env.TG_TIMER_PREFIX ?? ""
-    const htmlHeader = summary.repositorySummary
-      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
-      : summary.text
-        ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
-        : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
-    const plainHeader = summary.repositorySummary
-      ? `${prefix}${options.name}: in ${duration}s ${status}`
-      : summary.text
-        ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
-        : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
-    const htmlDetails = summary.details.map((line) => timerHtmlEscape(line)).join("\n")
-    const plainDetails = summary.details.join("\n")
+    const htmlHeader = structuredReport
+      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: <b>${structuredReport.titleHtml}</b> in ${duration}s ${status}`
+      : summary.repositorySummary
+        ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
+        : summary.text
+          ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
+          : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
+    const plainHeader = structuredReport
+      ? `${prefix}${options.name}: ${structuredReport.title} in ${duration}s ${status}`
+      : summary.repositorySummary
+        ? `${prefix}${options.name}: in ${duration}s ${status}`
+        : summary.text
+          ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
+          : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
+    const htmlDetails = structuredReport?.detailsHtml ?? summary.details.map((line) => timerHtmlEscape(line)).join("\n")
+    const plainDetails = structuredReport?.detailsText ?? summary.details.join("\n")
     const cardLines = [
       `job: ${timerHtmlEscape(options.name)}`,
       `host: ${timerHtmlEscape(host)}`,
