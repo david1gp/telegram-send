@@ -124,11 +124,11 @@ test("summarizes changed packages with their names and classifications in HTML a
   expect(captions[0]).toContain("<b>bun_update_global</b>: 2 packages updated in 8s ✅")
   expect(captions[0]).toContain("- vite: 8.3.2 -&gt; 8.3.3, patch")
   expect(captions[0]).toContain("- esbuild: 0.25.0 -&gt; 0.25.1, minor")
-  expect(captions[0]?.split("<pre>")[0]).not.toContain("- bun:")
+  expect(captions[0]).not.toContain("- bun:")
   expect(captions[1]).toContain("bun_update_global: 2 packages updated in 8s ✅")
   expect(captions[1]).toContain("- vite: 8.3.2 -> 8.3.3, patch")
   expect(captions[1]).toContain("- esbuild: 0.25.0 -> 0.25.1, minor")
-  expect(captions[1]?.split("\njob:")[0]).not.toContain("- bun:")
+  expect(captions[1]).not.toContain("- bun:")
   expect(captions[0]).toContain("<b>bun_update_global</b>")
   expect(captions[1]).not.toContain("<b>")
 })
@@ -163,7 +163,7 @@ test("formats repository update counts as categorized details without counts in 
   expect(captions[0]).toContain("<b>opensource_update</b>: in 125s ✅")
   expect(captions[0]).toContain("* 5 updated: x, y, z")
   expect(captions[0]).toContain("* 23 unchanged")
-  expect(captions[0]?.split("<pre>")[0]).not.toContain("created=0")
+  expect(captions[0]).not.toContain("created=0")
   expect(captions[1]).toContain("opensource_update: in 125s ✅")
   expect(captions[1]).toContain("* 5 updated: x, y, z")
   expect(captions[1]).toContain("* 23 unchanged")
@@ -254,11 +254,11 @@ test("renders structured single-update versions and labeled safe links in HTML a
   expect(captions[0]).toContain("1.2&amp; -&gt; 1.3")
   expect(captions[0]).toContain('<a href="https://example.com/releases/1.3?a=1&amp;b=2">Release</a>')
   expect(captions[0]).toContain('<a href="https://example.com/compare/1.2...1.3">Changes</a>')
-  expect(captions[0]?.split("<pre>")[0]).not.toContain("javascript:")
+  expect(captions[0]).not.toContain("javascript:")
   expect(captions[1]).toContain("bun updater: Bun <stable> in")
   expect(captions[1]).toContain("1.2& -> 1.3")
   expect(captions[1]).toContain("Release: https://example.com/releases/1.3?a=1&b=2")
-  expect(captions[1]?.split("\njob:")[0]).not.toContain("javascript:")
+  expect(captions[1]).not.toContain("javascript:")
 })
 
 test("renders structured batch entries compactly and suppresses metadata-only successful no-ops", async () => {
@@ -315,7 +315,9 @@ test("keeps structured failure reports useful without links or versions", async 
   expect(result.success).toBe(true)
   expect(caption).toContain("<b>Registry refresh</b> in")
   expect(caption).toContain("❌")
-  expect(caption).toContain("exit: 9")
+  expect(caption).toContain("❌")
+  expect(caption).not.toContain("exit:")
+  expect(caption).not.toContain("<pre>")
 })
 
 test("keeps all 21 shared-policy package details when caption metadata exceeds the limit", async () => {
@@ -430,7 +432,7 @@ test("does not promote unchanged classified packages and deduplicates repeated p
 
   expect(result.success).toBe(true)
   expect(caption).toContain("1 package updated")
-  const summary = caption.split("<pre>")[0] ?? caption
+  const summary = caption
   expect(summary.match(/- vite:/g)).toHaveLength(1)
   expect(summary).not.toContain("- bun:")
   expect(summary).not.toContain("1.4.2 -> 1.4.2")
