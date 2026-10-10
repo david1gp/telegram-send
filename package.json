@@ -48,7 +48,7 @@
     "dev": "bun run src/cli.ts",
     "test": "bun test",
     "test:w": "bun test --watch",
-    "type-check": "tsc --noEmit",
+    "type-check": "bun check",
     "build": "rm -rf ./dist && tsc -p ./tsconfig.lib.json && chmod +x ./dist/cli.js ./dist/timerCli.js",
     "deploy": "bash ./ops/deploy.sh",
     "release": "bash ./ops/release.sh",
