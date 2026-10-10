@@ -68,9 +68,8 @@ function timerSafeName(name: string): string {
   return name.replace(/[^A-Za-z0-9._-]/g, "_")
 }
 
-function timerCaptionSelect(fullCaption: string, detailsCaption: string, header: string): string {
-  if (fullCaption.length <= 1024) return fullCaption
-  if (detailsCaption.length <= 1024) return detailsCaption
+function timerCaptionSelect(caption: string, header: string): string {
+  if (caption.length <= 1024) return caption
   if (header.length <= 1024) return header
   return "Timer report"
 }
@@ -301,30 +300,8 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
           : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
     const htmlDetails = structuredReport?.detailsHtml ?? summary.details.map((line) => timerHtmlEscape(line)).join("\n")
     const plainDetails = structuredReport?.detailsText ?? summary.details.join("\n")
-    const cardLines = [
-      `job: ${timerHtmlEscape(options.name)}`,
-      `host: ${timerHtmlEscape(host)}`,
-      `unit: ${timerHtmlEscape(unit)}`,
-      `command: ${timerHtmlEscape(displayCommand)}`,
-      `duration: ${duration}s`,
-      `exit: ${exitCode}`,
-    ]
-    const plainLines = [
-      `job: ${options.name}`,
-      `host: ${host}`,
-      `unit: ${unit}`,
-      `command: ${displayCommand}`,
-      `duration: ${duration}s`,
-      `exit: ${exitCode}`,
-    ]
-    if (options.logFile) {
-      cardLines.push(`log: ${timerHtmlEscape(options.logFile)}`)
-      plainLines.push(`log: ${options.logFile}`)
-    }
-    const htmlCaption = `${htmlHeader}${htmlDetails ? `\n${htmlDetails}` : ""}\n<pre>${cardLines.join("\n")}</pre>`
-    const plainCaption = `${plainHeader}${plainDetails ? `\n${plainDetails}` : ""}\n${plainLines.join("\n")}`
-    const htmlDetailsCaption = `${htmlHeader}${htmlDetails ? `\n${htmlDetails}` : ""}`
-    const plainDetailsCaption = `${plainHeader}${plainDetails ? `\n${plainDetails}` : ""}`
+    const htmlCaption = `${htmlHeader}${htmlDetails ? `\n${htmlDetails}` : ""}`
+    const plainCaption = `${plainHeader}${plainDetails ? `\n${plainDetails}` : ""}`
     const documentParts = [
       Buffer.from("=== stdout ===\n"),
       stdoutContents,
@@ -394,7 +371,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const alert = exitCode !== 0
     const htmlResult = await telegramDocumentSend({
       alert,
-      caption: timerCaptionSelect(htmlCaption, htmlDetailsCaption, htmlHeader),
+      caption: timerCaptionSelect(htmlCaption, htmlHeader),
       configuration: options.configuration,
       env: options.env,
       envFile: options.envFile,
@@ -410,7 +387,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     stderr.write("tg-timer: HTML document caption failed; retrying as plain text\n")
     const plainResult = await telegramDocumentSend({
       alert,
-      caption: timerCaptionSelect(plainCaption, plainDetailsCaption, plainHeader),
+      caption: timerCaptionSelect(plainCaption, plainHeader),
       configuration: options.configuration,
       env: options.env,
       envFile: options.envFile,
