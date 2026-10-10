@@ -154,7 +154,7 @@ const chatIds = await telegramChatIdGet({ configuration: { botToken: "123456:rep
 ```sh
 bun run format          # format source and configuration
 bun run format:check
-bun run type-check
+bun run type-check       # Bun's built-in type checker (no emit)
 bun run test
 bun run build
 bun run deploy          # format check, type check, tests, and build
