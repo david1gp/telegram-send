@@ -53,3 +53,23 @@ test("bounds large batches and handles tiny and zero limits without exceeding th
     if (maxLength > 0) expect(tiny.detailsText.length).toBeGreaterThan(0)
   }
 })
+
+test("keeps each item's links on its version line", () => {
+  const compareUrl = "https://github.com/anomalyco/opencode/compare/v2.0.26...055d95bb7e27"
+  const rendered = telegramTimerSummaryRender({
+    name: "Open source repositories",
+    items: [
+      { name: "opencode", from: "v2.0.26", to: "github-v1.2.25-2160-g055d95bb7e27", compareUrl },
+      { name: "hono", from: "v4.0.0", to: "v4.0.1", releaseUrl: "https://github.com/honojs/hono/releases/tag/v4.0.1" },
+    ],
+  })
+
+  expect(rendered.detailsText.split("\n")).toEqual([
+    `opencode: v2.0.26 -> github-v1.2.25-2160-g055d95bb7e27 Changes: ${compareUrl}`,
+    "hono: v4.0.0 -> v4.0.1 Release: https://github.com/honojs/hono/releases/tag/v4.0.1",
+  ])
+  expect(rendered.detailsHtml.split("\n")).toEqual([
+    `opencode: v2.0.26 -&gt; github-v1.2.25-2160-g055d95bb7e27 <a href="${compareUrl}">Changes</a>`,
+    'hono: v4.0.0 -&gt; v4.0.1 <a href="https://github.com/honojs/hono/releases/tag/v4.0.1">Release</a>',
+  ])
+})

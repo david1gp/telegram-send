@@ -11,6 +11,8 @@ function summaryHtmlEscape(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;")
 }
 
+type SummaryLine = Readonly<{ base: string; links: readonly string[] }>
+
 function summaryItemLine(item: TelegramTimerSummaryItem): string {
   const transition = item.from || item.to ? `${item.from ?? "?"} -> ${item.to ?? "?"}` : ""
   return [item.name, transition].filter(Boolean).join(": ")
@@ -32,6 +34,11 @@ function summaryLinkHtml(item: TelegramTimerSummaryItem): readonly string[] {
   ]
 }
 
+/** Keep each item's links on its version line so one update reads as one line. */
+function summaryLineJoin(line: SummaryLine): string {
+  return [line.base, ...line.links].filter(Boolean).join(" ")
+}
+
 function summaryTextPrefix(value: string, maxLength: number): string {
   const tokens = value.match(/&(?:#\d+|#x[\da-f]+|[a-z]+);|./giu) ?? []
   let result = ""
@@ -42,11 +49,12 @@ function summaryTextPrefix(value: string, maxLength: number): string {
   return result
 }
 
-function summaryBound(lines: readonly string[], maxLength: number, html: boolean): string[] {
+function summaryBound(lines: readonly SummaryLine[], maxLength: number): string[] {
   const bound = Math.max(0, Math.floor(maxLength))
   if (bound === 0) return []
-  const totalLength = lines.reduce((length, line, index) => length + line.length + (index > 0 ? 1 : 0), 0)
-  if (totalLength <= bound) return [...lines]
+  const joined = lines.map(summaryLineJoin).filter(Boolean)
+  const totalLength = joined.reduce((length, line, index) => length + line.length + (index > 0 ? 1 : 0), 0)
+  if (totalLength <= bound) return joined
 
   const marker = "… (summary shortened)"
   const canShowMarker = marker.length + 2 <= bound
@@ -54,22 +62,22 @@ function summaryBound(lines: readonly string[], maxLength: number, html: boolean
   const result: string[] = []
   let used = 0
   for (const line of lines) {
+    const full = summaryLineJoin(line)
+    if (!full) continue
     const separator = result.length > 0 ? 1 : 0
     const remaining = contentLimit - used - separator
     if (remaining <= 0) break
-    if (line.length <= remaining) {
-      result.push(line)
-      used += separator + line.length
+    if (full.length <= remaining) {
+      result.push(full)
+      used += separator + full.length
       continue
     }
-    // Links are atomic: truncating their URL can make the rendered destination misleading.
-    const canTruncate = !html || !line.includes("<a ")
-    if (canTruncate) {
-      const prefix = summaryTextPrefix(line, remaining)
-      if (prefix) {
-        result.push(prefix)
-        used += separator + prefix.length
-      }
+    // Links are atomic: truncating their URL can make the rendered destination misleading,
+    // so an overflowing line keeps its version text and drops the links instead.
+    const prefix = line.base.length <= remaining ? line.base : summaryTextPrefix(line.base, remaining)
+    if (prefix) {
+      result.push(prefix)
+      used += separator + prefix.length
     }
     break
   }
@@ -81,20 +89,19 @@ function telegramTimerSummaryRender(summary: TelegramTimerSummary, maxLength = 6
   const batchItems = summary.items ?? []
   const title = summary.name ?? (batchItems.length > 0 ? `${batchItems.length} changes` : "Update")
   const targets = batchItems.length > 0 ? batchItems : [summary]
-  const plainLines = targets.flatMap((item) => {
-    const line = batchItems.length > 0 ? summaryItemLine(item) : [item.from, item.to].filter(Boolean).join(" -> ")
-    return [...(line ? [line] : []), ...summaryLinks(item)]
-  })
-  const htmlLines = targets.flatMap((item) => {
-    const line = batchItems.length > 0 ? summaryItemLine(item) : [item.from, item.to].filter(Boolean).join(" -> ")
-    return [...(line ? [summaryHtmlEscape(line)] : []), ...summaryLinkHtml(item)]
-  })
+  const itemText = (item: TelegramTimerSummaryItem) =>
+    batchItems.length > 0 ? summaryItemLine(item) : [item.from, item.to].filter(Boolean).join(" -> ")
+  const plainLines: SummaryLine[] = targets.map((item) => ({ base: itemText(item), links: summaryLinks(item) }))
+  const htmlLines: SummaryLine[] = targets.map((item) => ({
+    base: summaryHtmlEscape(itemText(item)),
+    links: summaryLinkHtml(item),
+  }))
   if (batchItems.length > 0) {
-    plainLines.push(...summaryLinks(summary))
-    htmlLines.push(...summaryLinkHtml(summary))
+    plainLines.push({ base: "", links: summaryLinks(summary) })
+    htmlLines.push({ base: "", links: summaryLinkHtml(summary) })
   }
-  const boundedText = summaryBound(plainLines, maxLength, false)
-  const boundedHtml = summaryBound(htmlLines, maxLength, true)
+  const boundedText = summaryBound(plainLines, maxLength)
+  const boundedHtml = summaryBound(htmlLines, maxLength)
   return {
     detailsHtml: boundedHtml.join("\n"),
     detailsText: boundedText.join("\n"),
