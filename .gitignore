@@ -45,3 +45,4 @@ pnpm-lock.yaml
 
 # npm publishing
 .npmrc
+bun.lock
