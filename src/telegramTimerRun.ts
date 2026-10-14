@@ -139,6 +139,38 @@ function timerSummaryFind(
       }
     }
   }
+  const logsCleanupLine = lines.find((line) => /^== summary:\s*deleted=\d+\s+trimmed=\d+\s+pruned_inv=\d+/.test(line))
+  if (logsCleanupLine) {
+    const counts = logsCleanupLine.match(/deleted=(\d+)\s+trimmed=(\d+)\s+pruned_inv=(\d+)/)
+    if (counts?.[1] && counts[2] && counts[3]) {
+      const deletedCount = Number(counts[1])
+      const trimmedCount = Number(counts[2])
+      const prunedCount = Number(counts[3])
+      const categoryDetails: string[] = []
+      for (const category of ["deleted", "trimmed", "pruned_inv"] as const) {
+        const count = category === "deleted" ? deletedCount : category === "trimmed" ? trimmedCount : prunedCount
+        if (count === 0) continue
+        const listLine = lines.find((line) => line.startsWith(`${category}:`))
+        const names =
+          listLine
+            ?.slice(category.length + 1)
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean) ?? []
+        if (names.length > 0) {
+          categoryDetails.push(`* ${count} ${category}: ${names.join(", ")}`)
+          continue
+        }
+        categoryDetails.push(`* ${count} ${category}`)
+      }
+      return {
+        details: categoryDetails,
+        text: "",
+        repositorySummary: true,
+        allCountsZero: deletedCount === 0 && trimmedCount === 0 && prunedCount === 0,
+      }
+    }
+  }
   for (const line of lines) {
     const classified = line.match(/^\s*-\s+([^:]+):\s*\S+\s*->\s*\S+,\s*.+?\s*$/)
     if (classified?.[1] && classifiedPackageNames.has(classified[1].trim())) continue

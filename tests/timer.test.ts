@@ -189,6 +189,60 @@ test("does not notify a marked successful repository summary when every count is
   expect(fetchCalls).toBe(0)
 })
 
+test("formats logs_cleanup counts as categorized details without counts in the heading", async () => {
+  const directory = await testDirectory()
+  const captions: string[] = []
+  const result = await telegramTimerRun({
+    command: commandFor(
+      [
+        "console.log('== summary: deleted=3 trimmed=0 pruned_inv=1 dir=/home/fabian/.config/timers/logs')",
+        "console.log('deleted: a.log b.log c.log')",
+        "console.log('pruned_inv: job.last.log.10')",
+        "console.log('UPDATE_APPLIED=1')",
+      ].join("; "),
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (_input, init) => {
+      captions.push(String((init?.body as FormData).get("caption")))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "logs_cleanup",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(captions).toHaveLength(1)
+  expect(captions[0]).toContain("<b>logs_cleanup</b>: in 0s ✅")
+  expect(captions[0]).toContain("* 3 deleted: a.log, b.log, c.log")
+  expect(captions[0]).toContain("* 1 pruned_inv: job.last.log.10")
+  expect(captions[0]).not.toContain("deleted=3")
+  expect(captions[0]).not.toContain("trimmed")
+  expect(captions[0]).not.toContain("dir=")
+})
+
+test("does not notify a marked successful logs_cleanup summary when every count is zero", async () => {
+  const directory = await testDirectory()
+  let fetchCalls = 0
+  const result = await telegramTimerRun({
+    command: commandFor(
+      "console.log('== summary: deleted=0 trimmed=0 pruned_inv=0 dir=/home/fabian/.config/timers/logs'); console.log('UPDATE_APPLIED=1')",
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async () => {
+      fetchCalls += 1
+      return new Response(JSON.stringify({ ok: true }))
+    },
+    name: "logs_cleanup",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.notificationAttempted).toBe(false)
+  expect(fetchCalls).toBe(0)
+})
+
 test("alerts on command failure even when its repository summary counts are all zero", async () => {
   const directory = await testDirectory()
   let fetchCalls = 0
