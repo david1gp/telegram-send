@@ -32,6 +32,29 @@ test("sends a silent HTML message", async () => {
   expect(body.get("disable_web_page_preview")).toBe("true")
 })
 
+test("sends multi-chunk message when message exceeds 4096 characters", async () => {
+  const sentChunks: string[] = []
+  const p1 = "p1: ".padEnd(3000, "a")
+  const p2 = "p2: ".padEnd(3000, "b")
+  const longMessage = `${p1}\n\n${p2}`
+
+  const result = await telegramMessageSend({
+    configuration: { botToken: "token", chatId: "chat" },
+    fetch: async (_input, init) => {
+      const body = new URLSearchParams(init?.body as string)
+      sentChunks.push(body.get("text")!)
+      return new Response(JSON.stringify({ ok: true, result: { message_id: sentChunks.length } }), { status: 200 })
+    },
+    html: false,
+    message: longMessage,
+  })
+
+  expect(result.success).toBe(true)
+  expect(sentChunks.length).toBe(2)
+  expect(sentChunks[0]).toBe(p1)
+  expect(sentChunks[1]).toBe(p2)
+})
+
 test("sends an alerting document with a plain caption", async () => {
   const directory = await mkdtemp(join(tmpdir(), "telegram-send-test-"))
   temporaryDirectories.push(directory)

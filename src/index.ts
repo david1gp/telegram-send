@@ -25,6 +25,7 @@ export {
   telegramMessageSend,
   telegramMessageSend as telegramSendMessage,
 } from "./telegramMessageSend.js"
+export { telegramMessageSplit } from "./telegramMessageSplit.js"
 export type {
   TelegramFetch,
   TelegramSendRuntimeOptions,

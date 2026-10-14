@@ -2,6 +2,7 @@ import type { Result } from "#result"
 import { createResult, createResultError } from "#result"
 import { telegramApiRequestSend } from "./telegramApiRequestSend.js"
 import { telegramConfigurationLoad } from "./telegramConfigurationLoad.js"
+import { telegramMessageSplit } from "./telegramMessageSplit.js"
 import type { TelegramSendRuntimeOptions } from "./telegramSendRuntimeOptions.js"
 
 type TelegramMessageSendOptions = TelegramSendRuntimeOptions &
@@ -18,24 +19,31 @@ async function telegramMessageSend(options: TelegramMessageSendOptions): Promise
     : await telegramConfigurationLoad({ env: options.env, envFile: options.envFile })
   if (!configuration.success) return createResultError(op, configuration.errorMessage)
 
-  const body = new URLSearchParams({
-    chat_id: configuration.data.chatId,
-    text: options.message,
-    disable_notification: String(!(options.alert ?? false)),
-    disable_web_page_preview: "true",
-  })
-  if (options.html) body.set("parse_mode", "HTML")
+  const chunks = telegramMessageSplit(options.message, 4096, options.html ?? false)
+  if (chunks.length === 0) return createResult(undefined)
 
-  const response = await telegramApiRequestSend({
-    botToken: configuration.data.botToken,
-    body,
-    fetch: options.fetch,
-    method: "sendMessage",
-    signal: options.signal,
-    timeoutMilliseconds: 30_000,
-  })
-  if (!response.success) return createResultError(op, `sendMessage failed: ${response.errorMessage}`)
-  return createResult(response.data)
+  let lastData: unknown
+  for (const chunk of chunks) {
+    const body = new URLSearchParams({
+      chat_id: configuration.data.chatId,
+      text: chunk,
+      disable_notification: String(!(options.alert ?? false)),
+      disable_web_page_preview: "true",
+    })
+    if (options.html) body.set("parse_mode", "HTML")
+
+    const response = await telegramApiRequestSend({
+      botToken: configuration.data.botToken,
+      body,
+      fetch: options.fetch,
+      method: "sendMessage",
+      signal: options.signal,
+      timeoutMilliseconds: 30_000,
+    })
+    if (!response.success) return createResultError(op, `sendMessage failed: ${response.errorMessage}`)
+    lastData = response.data
+  }
+  return createResult(lastData)
 }
 
 export type { TelegramMessageSendOptions }
