@@ -39,53 +39,7 @@ function summaryLineJoin(line: SummaryLine): string {
   return [line.base, ...line.links].filter(Boolean).join(" ")
 }
 
-function summaryTextPrefix(value: string, maxLength: number): string {
-  const tokens = value.match(/&(?:#\d+|#x[\da-f]+|[a-z]+);|./giu) ?? []
-  let result = ""
-  for (const token of tokens) {
-    if (result.length + token.length > maxLength) break
-    result += token
-  }
-  return result
-}
-
-function summaryBound(lines: readonly SummaryLine[], maxLength: number): string[] {
-  const bound = Math.max(0, Math.floor(maxLength))
-  if (bound === 0) return []
-  const joined = lines.map(summaryLineJoin).filter(Boolean)
-  const totalLength = joined.reduce((length, line, index) => length + line.length + (index > 0 ? 1 : 0), 0)
-  if (totalLength <= bound) return joined
-
-  const marker = "… (summary shortened)"
-  const canShowMarker = marker.length + 2 <= bound
-  const contentLimit = canShowMarker ? Math.max(0, bound - marker.length - 1) : bound
-  const result: string[] = []
-  let used = 0
-  for (const line of lines) {
-    const full = summaryLineJoin(line)
-    if (!full) continue
-    const separator = result.length > 0 ? 1 : 0
-    const remaining = contentLimit - used - separator
-    if (remaining <= 0) break
-    if (full.length <= remaining) {
-      result.push(full)
-      used += separator + full.length
-      continue
-    }
-    // Links are atomic: truncating their URL can make the rendered destination misleading,
-    // so an overflowing line keeps its version text and drops the links instead.
-    const prefix = line.base.length <= remaining ? line.base : summaryTextPrefix(line.base, remaining)
-    if (prefix) {
-      result.push(prefix)
-      used += separator + prefix.length
-    }
-    break
-  }
-  if (canShowMarker) result.push(marker)
-  return result
-}
-
-function telegramTimerSummaryRender(summary: TelegramTimerSummary, maxLength = 650): TelegramTimerSummaryRender {
+function telegramTimerSummaryRender(summary: TelegramTimerSummary): TelegramTimerSummaryRender {
   const batchItems = summary.items ?? []
   const title = summary.name ?? (batchItems.length > 0 ? `${batchItems.length} changes` : "Update")
   const targets = batchItems.length > 0 ? batchItems : [summary]
@@ -100,11 +54,9 @@ function telegramTimerSummaryRender(summary: TelegramTimerSummary, maxLength = 6
     plainLines.push({ base: "", links: summaryLinks(summary) })
     htmlLines.push({ base: "", links: summaryLinkHtml(summary) })
   }
-  const boundedText = summaryBound(plainLines, maxLength)
-  const boundedHtml = summaryBound(htmlLines, maxLength)
   return {
-    detailsHtml: boundedHtml.join("\n"),
-    detailsText: boundedText.join("\n"),
+    detailsHtml: htmlLines.map(summaryLineJoin).filter(Boolean).join("\n"),
+    detailsText: plainLines.map(summaryLineJoin).filter(Boolean).join("\n"),
     title,
     titleHtml: summaryHtmlEscape(title),
   }
