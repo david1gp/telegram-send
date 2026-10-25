@@ -72,9 +72,9 @@ Wrap a scheduled command:
 tg-timer --unit backup.service --log-file /var/log/backup.log backup bun run backup
 ```
 
-Child stdout and stderr are streamed through and uploaded with the notification. The child exit code is preserved. A notification is sent when the command fails, or when a successful command prints the exact line `UPDATE_APPLIED=1` to stdout. Successful commands without that marker do not contact Telegram.
+Child stdout and stderr are streamed through and preserved in the durable last-run log. The child exit code is preserved. A notification is sent when the command fails, or when a successful command prints the exact line `UPDATE_APPLIED=1` to stdout. Successful commands without that marker do not contact Telegram.
 
-Successful update notifications are silent; failure notifications are alerting. Captions include the job, host, unit, command, duration, and exit code. `tg-timer` tries an HTML caption first and retries with plain text if Telegram rejects it.
+Successful update notifications are silent plain-text messages with the summary; no log document is attached. Failure notifications are alerting messages with the captured log attached as a document, and the failure headline names the failed project and reason at a glance. Captions include the job, host, unit, command, duration, and exit code. `tg-timer` tries HTML first and retries with plain text if Telegram rejects it.
 
 ### Summary and update conventions
 
@@ -86,7 +86,7 @@ For a successful command, the first matching summary line becomes the notificati
 == summary: 2 changes
 ```
 
-To force a notification for a successful run, print `UPDATE_APPLIED=1` on its own line (with no indentation). A failed command always notifies, regardless of its output.
+To force a notification for a successful run, print `UPDATE_APPLIED=1` on its own line (with no indentation). A failed command always notifies, regardless of its output. For a failed command, structured `UPDATE_SUMMARY` failure items (`name (failed: reason)`), `== failed:` names, and the first error line become the failure headline so the project and reason read at a glance.
 
 ### Logs
 
