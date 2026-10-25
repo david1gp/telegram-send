@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import type { Result } from "#result"
 import { createResult, createResultError } from "#result"
 import { telegramDocumentSend } from "./telegramDocumentSend.js"
+import { telegramMessageSend } from "./telegramMessageSend.js"
 import type { TelegramSendRuntimeOptions } from "./telegramSendRuntimeOptions.js"
 import { telegramTimerSummaryParse } from "./telegramTimerSummaryParse.js"
 import { telegramTimerSummaryRender } from "./telegramTimerSummaryRender.js"
@@ -13,6 +14,9 @@ import { telegramTimerSummaryRender } from "./telegramTimerSummaryRender.js"
 const defaultMaxLogFileBytes = 200_000
 const defaultMaxDocumentBytes = 45 * 1024 * 1024
 const maxSnapshots = 10
+const timerFailureReasonPattern = /fatal:|ERROR:|error:|cannot |not possible|refus|denied|mismatch|invalid/i
+const timerFailureReasonMaxLength = 160
+const timerFailureTextMaxLength = 300
 
 type TelegramTimerOutput = Readonly<{
   write: (text: string) => void
@@ -184,6 +188,44 @@ function timerSummaryFind(
   return { details: [], text: "", repositorySummary: false, allCountsZero: false }
 }
 
+function timerFailureReasonCompact(reason: string | undefined): string | undefined {
+  const lines = reason
+    ?.split("\n")
+    .map((entry) => entry.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+  const line = lines?.find((entry) => timerFailureReasonPattern.test(entry)) ?? lines?.[0]
+  return line?.slice(0, timerFailureReasonMaxLength) || undefined
+}
+
+function timerFailureFind(
+  stdoutText: string,
+  stderrText: string,
+): Readonly<{ details: readonly string[]; text: string }> {
+  const structured = telegramTimerSummaryParse(stdoutText)
+  const reasons: string[] = []
+  for (const item of structured?.items ?? []) {
+    const failed = item.name?.match(/^(.*) \(failed(?:: (.*))?\)$/)
+    if (!failed?.[1]) continue
+    const reason = timerFailureReasonCompact(failed[2])
+    reasons.push(reason ? `${failed[1]}: ${reason}` : failed[1])
+  }
+  if (reasons.length > 0) {
+    return { details: reasons, text: `failed: ${reasons.join("; ")}`.slice(0, timerFailureTextMaxLength) }
+  }
+  const lines = [...stderrText.split(/\r?\n/), ...stdoutText.split(/\r?\n/)].map((line) =>
+    line.replace(/^\[[^\]]*\] /, "").trim(),
+  )
+  const names =
+    lines
+      .find((line) => line.startsWith("== failed:"))
+      ?.slice("== failed:".length)
+      .trim() ?? ""
+  const why = timerFailureReasonCompact(
+    lines.find((line) => timerFailureReasonPattern.test(line)) ?? lines.find((line) => line.length > 0),
+  )
+  return { details: names ? [names] : [], text: `failed${names ? `: ${names}` : ""}${why ? ` (${why})` : ""}` }
+}
+
 function timerDateFormat(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0")
   const offset = -date.getTimezoneOffset()
@@ -307,6 +349,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const stdoutContents = await readFile(stdoutCapture.file)
     const stderrContents = await readFile(stderrCapture.file)
     const stdoutText = stdoutContents.toString()
+    const stderrText = stderrContents.toString()
     const summary = timerSummaryFind(stdoutText, exitCode)
     const structuredSummary = telegramTimerSummaryParse(stdoutText)
     const structuredReport = structuredSummary ? telegramTimerSummaryRender(structuredSummary) : undefined
@@ -316,22 +359,30 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const status = exitCode === 0 ? "✅" : "❌"
     const result = exitCode === 0 ? "ok" : "failed"
     const prefix = env.TG_TIMER_PREFIX ?? ""
+    const failure = exitCode === 0 ? { details: [], text: "" } : timerFailureFind(stdoutText, stderrText)
+    const failureHeader = failure.text
+      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(failure.text)} in ${duration}s ${status}`
+      : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
+    const failurePlainHeader = failure.text
+      ? `${prefix}${options.name}: ${failure.text} in ${duration}s ${status}`
+      : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
     const htmlHeader = structuredReport
       ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: <b>${structuredReport.titleHtml}</b> in ${duration}s ${status}`
       : summary.repositorySummary
         ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
         : summary.text
           ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
-          : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
+          : failureHeader
     const plainHeader = structuredReport
       ? `${prefix}${options.name}: ${structuredReport.title} in ${duration}s ${status}`
       : summary.repositorySummary
         ? `${prefix}${options.name}: in ${duration}s ${status}`
         : summary.text
           ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
-          : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
-    const htmlDetails = structuredReport?.detailsHtml ?? summary.details.map((line) => timerHtmlEscape(line)).join("\n")
-    const plainDetails = structuredReport?.detailsText ?? summary.details.join("\n")
+          : failurePlainHeader
+    const detailLines = [...summary.details, ...failure.details]
+    const htmlDetails = structuredReport?.detailsHtml ?? detailLines.map((line) => timerHtmlEscape(line)).join("\n")
+    const plainDetails = structuredReport?.detailsText ?? detailLines.join("\n")
     const htmlCaption = `${htmlHeader}${htmlDetails ? `\n${htmlDetails}` : ""}`
     const plainCaption = `${plainHeader}${plainDetails ? `\n${plainDetails}` : ""}`
     const documentParts = [
@@ -399,6 +450,38 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
 
     if (env.TG_TIMER_DEBUG === "1") {
       stderr.write(`tg-timer: document=${safeName}-logs.txt bytes=${(await stat(documentFile)).size}\n`)
+    }
+    if (exitCode === 0) {
+      const messageResult = await telegramMessageSend({
+        alert: false,
+        configuration: options.configuration,
+        env: options.env,
+        envFile: options.envFile,
+        fetch: options.fetch,
+        html: true,
+        message: timerCaptionSelect(htmlCaption, htmlHeader),
+        signal: options.signal,
+      })
+      if (messageResult.success) {
+        stderr.write("tg-timer: Telegram message sent\n")
+        return createResult({ exitCode, lastLogFile, notificationAttempted, notified: true })
+      }
+      stderr.write("tg-timer: HTML message failed; retrying as plain text\n")
+      const plainMessageResult = await telegramMessageSend({
+        alert: false,
+        configuration: options.configuration,
+        env: options.env,
+        envFile: options.envFile,
+        fetch: options.fetch,
+        message: timerCaptionSelect(plainCaption, plainHeader),
+        signal: options.signal,
+      })
+      if (plainMessageResult.success) {
+        stderr.write("tg-timer: Telegram message sent (plain text)\n")
+        return createResult({ exitCode, lastLogFile, notificationAttempted, notified: true })
+      }
+      stderr.write("tg-timer: Telegram message send failed entirely\n")
+      return createResult({ exitCode, lastLogFile, notificationAttempted, notified: false })
     }
     const alert = exitCode !== 0
     const htmlResult = await telegramDocumentSend({

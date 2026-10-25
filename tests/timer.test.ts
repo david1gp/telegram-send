@@ -20,6 +20,13 @@ function commandFor(script: string): readonly string[] {
   return [process.execPath, "-e", script]
 }
 
+function timerRequestText(input: unknown, init: RequestInit | undefined): Readonly<{ method: string; text: string }> {
+  const url = String(input)
+  const body = init?.body as URLSearchParams | FormData | undefined
+  const text = body instanceof URLSearchParams ? (body.get("text") ?? "") : String(body?.get("caption") ?? "")
+  return { method: url.slice(url.lastIndexOf("/") + 1), text }
+}
+
 test("ignores malformed structured metadata and unsafe URLs without throwing", () => {
   expect(telegramTimerSummaryParse("UPDATE_SUMMARY={bad json}")).toBeUndefined()
   expect(
@@ -35,6 +42,98 @@ test("ignores malformed structured metadata and unsafe URLs without throwing", (
   expect(rendered.titleHtml).toBe("&lt;release&gt;")
   expect(rendered.detailsHtml).not.toContain("file:")
   expect(rendered.detailsHtml).toContain('href="https://example.com/r"')
+})
+
+test("sends a quiet text message without a log document on success", async () => {
+  const directory = await testDirectory()
+  const requests: Array<{ method: string; text: string; quiet: boolean; hasDocument: boolean }> = []
+  const result = await telegramTimerRun({
+    command: commandFor("console.log('- vite: 8.3.2 -> 8.3.3, patch'); console.log('UPDATE_APPLIED=1')"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      const body = init?.body as URLSearchParams | FormData
+      requests.push({
+        ...timerRequestText(input, init),
+        quiet: String(body.get("disable_notification")) === "true",
+        hasDocument: body instanceof FormData && body.has("document"),
+      })
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "bun_update_global",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(0)
+  expect(result.data.notificationAttempted).toBe(true)
+  expect(result.data.notified).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe("sendMessage")
+  expect(requests[0]?.hasDocument).toBe(false)
+  expect(requests[0]?.quiet).toBe(true)
+  expect(requests[0]?.text).toContain("<b>bun_update_global</b>: 1 package updated in")
+  expect(requests[0]?.text).toContain("- vite: 8.3.2 -&gt; 8.3.3, patch")
+})
+
+test("attaches the log document and names the failed project and reason on failure", async () => {
+  const directory = await testDirectory()
+  const requests: Array<{ method: string; text: string; quiet: boolean; hasDocument: boolean }> = []
+  const documents: string[] = []
+  const result = await telegramTimerRun({
+    command: commandFor(
+      `console.log(${JSON.stringify('UPDATE_SUMMARY={"name":"Repositories","items":[{"name":"dev-servers (failed: fatal: Not possible to fast-forward, aborting.)"}]}')}); process.exit(1)`,
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      const body = init?.body as URLSearchParams | FormData
+      requests.push({
+        ...timerRequestText(input, init),
+        quiet: String(body.get("disable_notification")) === "true",
+        hasDocument: body instanceof FormData && body.has("document"),
+      })
+      if (body instanceof FormData) documents.push(await (body.get("document") as File).text())
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "leo_internal_update",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(1)
+  expect(result.data.notificationAttempted).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe("sendDocument")
+  expect(requests[0]?.hasDocument).toBe(true)
+  expect(requests[0]?.quiet).toBe(false)
+  expect(requests[0]?.text).toContain("dev-servers (failed: fatal: Not possible to fast-forward, aborting.)")
+  expect(requests[0]?.text).toContain("❌")
+  expect(documents[0]).toContain("=== stdout ===")
+  expect(documents[0]).toContain("=== stderr ===")
+})
+
+test("falls back to failed names and the first error line without a structured summary", async () => {
+  const directory = await testDirectory()
+  let method = ""
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor(
+      "console.log('== failed: dev-servers'); process.stderr.write('hint: diverging\\nfatal: Not possible to fast-forward, aborting.\\n'); process.exit(1)",
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      ;({ method, text: caption } = timerRequestText(input, init))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "leo_internal_update",
+  })
+
+  expect(result.success).toBe(true)
+  expect(method).toBe("sendDocument")
+  expect(caption).toContain("failed: dev-servers (fatal: Not possible to fast-forward, aborting.)")
+  expect(caption).toContain("❌")
 })
 
 test("streams command output, preserves failure status, and alerts with a document", async () => {
@@ -66,16 +165,15 @@ test("streams command output, preserves failure status, and alerts with a docume
   expect(await (body.get("document") as File).text()).toContain("=== stdout ===")
 })
 
-test("retries a failed HTML caption as plain text without changing the command status", async () => {
+test("retries a failed HTML message as plain text without changing the command status", async () => {
   const directory = await testDirectory()
   const captions: string[] = []
   const result = await telegramTimerRun({
     command: commandFor("console.log('UPDATE_APPLIED=1')"),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      const body = init?.body as FormData
-      captions.push(String(body.get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return captions.length === 1
         ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -106,9 +204,8 @@ test("summarizes changed packages with their names and classifications in HTML a
     ),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      const body = init?.body as FormData
-      captions.push(String(body.get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return captions.length === 1
         ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -148,8 +245,8 @@ test("formats repository update counts as categorized details without counts in 
     ),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      captions.push(String((init?.body as FormData).get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return captions.length === 1
         ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -203,8 +300,8 @@ test("formats logs_cleanup counts as categorized details without counts in the h
     ),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      captions.push(String((init?.body as FormData).get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return new Response(JSON.stringify({ ok: true }), { status: 200 })
     },
     name: "logs_cleanup",
@@ -272,8 +369,8 @@ test("preserves the legacy single-updater summary", async () => {
     command: commandFor("console.log('- cache: 1.0 -> 2.0'); console.log('UPDATE_APPLIED=1')"),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      caption = String((init?.body as FormData).get("caption"))
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
       return new Response(JSON.stringify({ ok: true }), { status: 200 })
     },
     name: "legacy updater",
@@ -293,8 +390,8 @@ test("renders structured single-update versions and labeled safe links in HTML a
     ),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      captions.push(String((init?.body as FormData).get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return captions.length === 1
         ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -324,8 +421,8 @@ test("renders structured batch entries compactly and suppresses metadata-only su
     ),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      caption = String((init?.body as FormData).get("caption"))
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
       return new Response(JSON.stringify({ ok: true }), { status: 200 })
     },
     name: "system update",
@@ -407,8 +504,8 @@ test("keeps all 21 shared-policy package details when caption metadata exceeds t
     command: commandFor(outputLines.join("; ")),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, HOSTNAME: "h".repeat(700), XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      captions.push(String((init?.body as FormData).get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return captions.length === 1
         ? new Response(JSON.stringify({ ok: false, description: "bad HTML" }), { status: 400 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -445,8 +542,8 @@ test("bounds the header fallback for oversized job, prefix, and structured title
       TG_TIMER_PREFIX: "<b>prefix & </b>".repeat(300),
       XDG_CONFIG_HOME: directory,
     },
-    fetch: async (_input, init) => {
-      captions.push(String((init?.body as FormData).get("caption")))
+    fetch: async (input, init) => {
+      captions.push(timerRequestText(input, init).text)
       return captions.length === 1
         ? new Response(JSON.stringify({ ok: false, description: "retry as plain" }), { status: 400 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 })
@@ -477,8 +574,8 @@ test("does not promote unchanged classified packages and deduplicates repeated p
     ),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory, XDG_CONFIG_HOME: directory },
-    fetch: async (_input, init) => {
-      caption = String((init?.body as FormData).get("caption"))
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
       return new Response(JSON.stringify({ ok: true }), { status: 200 })
     },
     name: "bun_update_global",
@@ -523,7 +620,7 @@ test("limits an included log file and the notification document", async () => {
   await Bun.write(logFile, "0123456789abcdefghij")
   let documentText = ""
   const result = await telegramTimerRun({
-    command: commandFor("console.log('UPDATE_APPLIED=1'); console.log('1234567890')"),
+    command: commandFor("console.log('UPDATE_APPLIED=1'); console.log('1234567890'); process.exit(1)"),
     configuration: { botToken: "token", chatId: "chat" },
     env: { HOME: directory },
     fetch: async (_input, init) => {
