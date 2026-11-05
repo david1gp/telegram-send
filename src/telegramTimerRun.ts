@@ -82,6 +82,14 @@ function timerSummaryFind(
   stdout: string,
   exitCode: number,
 ): Readonly<{ details: readonly string[]; text: string; repositorySummary: boolean; allCountsZero: boolean }> {
+  if (exitCode === 3) {
+    const text =
+      stdout
+        .split(/\r?\n/)
+        .map((line) => line.match(/^== summary:\s*(.*)$/)?.[1])
+        .find(Boolean) ?? ""
+    return { details: [], text, repositorySummary: false, allCountsZero: false }
+  }
   if (exitCode !== 0) return { details: [], text: "", repositorySummary: false, allCountsZero: false }
   const lines = stdout.split(/\r?\n/)
   const classifiedPackageNames = new Set<string>()
@@ -356,30 +364,37 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const host = env.TG_TIMER_HOST || env.HOSTNAME || hostname()
     const unit = options.unit ?? "not supplied"
     const displayCommand = timerCommandDisplay(options.command)
-    const status = exitCode === 0 ? "✅" : "❌"
-    const result = exitCode === 0 ? "ok" : "failed"
+    const status = exitCode === 0 ? "✅" : exitCode === 3 ? "⚠️" : "❌"
+    const result = exitCode === 0 ? "ok" : exitCode === 3 ? "needs attention" : "failed"
     const prefix = env.TG_TIMER_PREFIX ?? ""
-    const failure = exitCode === 0 ? { details: [], text: "" } : timerFailureFind(stdoutText, stderrText)
+    const failure =
+      exitCode === 0 || exitCode === 3 ? { details: [], text: "" } : timerFailureFind(stdoutText, stderrText)
     const failureHeader = failure.text
       ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(failure.text)} in ${duration}s ${status}`
       : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
     const failurePlainHeader = failure.text
       ? `${prefix}${options.name}: ${failure.text} in ${duration}s ${status}`
       : `${prefix}${options.name}: ${result} in ${duration}s ${status}`
-    const htmlHeader = structuredReport
-      ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: <b>${structuredReport.titleHtml}</b> in ${duration}s ${status}`
-      : summary.repositorySummary
-        ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
-        : summary.text
-          ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
-          : failureHeader
-    const plainHeader = structuredReport
-      ? `${prefix}${options.name}: ${structuredReport.title} in ${duration}s ${status}`
-      : summary.repositorySummary
-        ? `${prefix}${options.name}: in ${duration}s ${status}`
-        : summary.text
-          ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
-          : failurePlainHeader
+    const htmlHeader =
+      exitCode === 3
+        ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result}${summary.text ? `: ${timerHtmlEscape(summary.text)}` : ""} in ${duration}s ${status}`
+        : structuredReport
+          ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: <b>${structuredReport.titleHtml}</b> in ${duration}s ${status}`
+          : summary.repositorySummary
+            ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
+            : summary.text
+              ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(summary.text)} in ${duration}s ${status}`
+              : failureHeader
+    const plainHeader =
+      exitCode === 3
+        ? `${prefix}${options.name}: ${result}${summary.text ? `: ${summary.text}` : ""} in ${duration}s ${status}`
+        : structuredReport
+          ? `${prefix}${options.name}: ${structuredReport.title} in ${duration}s ${status}`
+          : summary.repositorySummary
+            ? `${prefix}${options.name}: in ${duration}s ${status}`
+            : summary.text
+              ? `${prefix}${options.name}: ${summary.text} in ${duration}s ${status}`
+              : failurePlainHeader
     const detailLines = [...summary.details, ...failure.details]
     const htmlDetails = structuredReport?.detailsHtml ?? detailLines.map((line) => timerHtmlEscape(line)).join("\n")
     const plainDetails = structuredReport?.detailsText ?? detailLines.join("\n")

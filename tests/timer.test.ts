@@ -76,6 +76,50 @@ test("sends a quiet text message without a log document on success", async () =>
   expect(requests[0]?.text).toContain("- vite: 8.3.2 -&gt; 8.3.3, patch")
 })
 
+test("exit 3 always alerts with needs attention and the generic summary", async () => {
+  const directory = await testDirectory()
+  const requests: Array<{ method: string; text: string; quiet: boolean }> = []
+  const result = await telegramTimerRun({
+    command: commandFor("console.log('== summary: warning convention test'); process.exit(3)"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      const body = init?.body as FormData
+      requests.push({ ...timerRequestText(input, init), quiet: String(body.get("disable_notification")) === "true" })
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "any_job",
+  })
+  expect(result.success && result.data.exitCode).toBe(3)
+  expect(result.success && result.data.notified).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe("sendDocument")
+  expect(requests[0]?.quiet).toBe(false)
+  expect(requests[0]?.text).toContain("needs attention: warning convention test")
+  expect(requests[0]?.text).toContain("⚠️")
+  expect(requests[0]?.text).not.toContain("❌")
+})
+
+test("a marked success sends its generic summary", async () => {
+  const directory = await testDirectory()
+  const requests: Array<{ method: string; text: string }> = []
+  const result = await telegramTimerRun({
+    command: commandFor("console.log('== summary: success convention test'); console.log('UPDATE_APPLIED=1')"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      requests.push(timerRequestText(input, init))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "any_job",
+  })
+  expect(result.success && result.data.notified).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe("sendMessage")
+  expect(requests[0]?.text).toContain("success convention test")
+  expect(requests[0]?.text).toContain("✅")
+})
+
 test("attaches the log document and names the failed project and reason on failure", async () => {
   const directory = await testDirectory()
   const requests: Array<{ method: string; text: string; quiet: boolean; hasDocument: boolean }> = []

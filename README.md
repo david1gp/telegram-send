@@ -72,7 +72,7 @@ Wrap a scheduled command:
 tg-timer --unit backup.service --log-file /var/log/backup.log backup bun run backup
 ```
 
-Child stdout and stderr are streamed through and preserved in the durable last-run log. The child exit code is preserved. A notification is sent when the command fails, or when a successful command prints the exact line `UPDATE_APPLIED=1` to stdout. Successful commands without that marker do not contact Telegram.
+Child stdout and stderr are streamed through and preserved in the durable last-run log. The child exit code is preserved. Exit code `3` means **needs attention** (⚠️) and always sends an alert with the log, like a failure. Other nonzero exit codes mean failed (❌). A successful command sends a notification when it prints the exact line `UPDATE_APPLIED=1` to stdout (except recognized all-zero summaries); successful commands without that marker do not contact Telegram. Any job can print `== summary: details` to include its detail in a success or needs-attention notification.
 
 Successful update notifications are silent plain-text messages with the summary; no log document is attached. Failure notifications are alerting messages with the captured log attached as a document, and the failure headline names the failed project and reason at a glance. Captions include the job, host, unit, command, duration, and exit code. `tg-timer` tries HTML first and retries with plain text if Telegram rejects it.
 
