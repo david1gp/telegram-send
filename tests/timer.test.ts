@@ -153,11 +153,12 @@ test("attaches the log document and names the failed project and reason on failu
   expect(requests[0]?.quiet).toBe(false)
   expect(requests[0]?.text).toContain("dev-servers (failed: fatal: Not possible to fast-forward, aborting.)")
   expect(requests[0]?.text).toContain("❌")
+  expect(requests[0]?.text).toContain("(exit code 1)")
   expect(documents[0]).toContain("=== stdout ===")
   expect(documents[0]).toContain("=== stderr ===")
 })
 
-test("falls back to failed names and the first error line without a structured summary", async () => {
+test("falls back to failed names and the last keyword line without a structured summary", async () => {
   const directory = await testDirectory()
   let method = ""
   let caption = ""
@@ -176,7 +177,7 @@ test("falls back to failed names and the first error line without a structured s
 
   expect(result.success).toBe(true)
   expect(method).toBe("sendDocument")
-  expect(caption).toContain("failed: dev-servers (fatal: Not possible to fast-forward, aborting.)")
+  expect(caption).toContain("failed: dev-servers (fatal: Not possible to fast-forward, aborting.; exit code 1)")
   expect(caption).toContain("❌")
 })
 
@@ -508,7 +509,7 @@ test("keeps structured failure reports useful without links or versions", async 
     name: "registry updater",
   })
   expect(result.success).toBe(true)
-  expect(caption).toContain("<b>Registry refresh</b> in")
+  expect(caption).toContain("<b>Registry refresh</b> (exit code 9) in")
   expect(caption).toContain("❌")
   expect(caption).toContain("❌")
   expect(caption).not.toContain("exit:")
@@ -680,4 +681,187 @@ test("limits an included log file and the notification document", async () => {
   expect(result.success).toBe(true)
   expect(new TextEncoder().encode(documentText).byteLength).toBeLessThanOrEqual(80)
   expect(documentText).toContain("fghij")
+})
+
+test("prefers the last keyword line for the failure detail", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("process.stderr.write('warning: cannot read cache\\nfatal: boom\\n'); process.exit(1)"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "keyword_job",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("failed (fatal: boom; exit code 1)")
+  expect(caption).not.toContain("cannot read cache")
+})
+
+test("falls back to the last unmatched stderr lines with the exit code", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor(
+      "process.stderr.write('first noise\\nopencodeExecutablePatch: /path/opencode.exe: Unrecognized Report diagnostics call\\n'); process.exit(1)",
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "opencode_skills_cleanup",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("Unrecognized Report diagnostics call")
+  expect(caption).toContain("exit code 1")
+})
+
+test("falls back to stdout lines when stderr is empty", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("console.log('something broke quietly'); process.exit(2)"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "quiet_job",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(2)
+  expect(caption).toContain("something broke quietly")
+  expect(caption).toContain("exit code 2")
+})
+
+test("caps fallback detail at the last three output lines", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor(
+      "for (let step = 1; step <= 5; step += 1) process.stderr.write(`step ${step} done\\n`); process.exit(1)",
+    ),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "long_job",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("step 3 done; step 4 done; step 5 done")
+  expect(caption).not.toContain("step 1 done")
+  expect(caption).not.toContain("step 2 done")
+})
+
+test("names the exit code when failure output is empty", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("process.exit(1)"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "silent_job",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(1)
+  expect(caption).toContain("silent_job</b>: failed (exit code 1) in")
+})
+
+test("reports the signal when the command is killed", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("process.kill(process.pid, 'SIGTERM')"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "killed_job",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(128)
+  expect(caption).toContain("killed by SIGTERM")
+})
+
+test("reports a command that fails to start with exit code 127", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: ["definitely-missing-tg-timer-binary"],
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "missing_job",
+  })
+
+  expect(result.success).toBe(true)
+  if (!result.success) return
+  expect(result.data.exitCode).toBe(127)
+  expect(caption).toContain("failed to start")
+  expect(caption).toContain("exit code 127")
+})
+
+test("strips ANSI escapes and truncates long failure lines", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("process.stderr.write('\\x1b[31m' + 'e'.repeat(300) + '\\x1b[0m\\n'); process.exit(1)"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "ansi_job",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("e".repeat(160))
+  expect(caption).not.toContain("e".repeat(161))
+  expect(caption).not.toContain("")
+})
+
+test("escapes HTML in fallback failure detail", async () => {
+  const directory = await testDirectory()
+  let caption = ""
+  const result = await telegramTimerRun({
+    command: commandFor("process.stderr.write('<b>oops</b> broke\\n'); process.exit(1)"),
+    configuration: { botToken: "token", chatId: "chat" },
+    env: { HOME: directory, XDG_CONFIG_HOME: directory },
+    fetch: async (input, init) => {
+      caption = timerRequestText(input, init).text
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    },
+    name: "html_job",
+  })
+
+  expect(result.success).toBe(true)
+  expect(caption).toContain("&lt;b&gt;oops&lt;/b&gt; broke")
+  expect(caption).not.toContain("<b>oops</b>")
 })

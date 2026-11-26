@@ -16,7 +16,13 @@ const defaultMaxDocumentBytes = 45 * 1024 * 1024
 const maxSnapshots = 10
 const timerFailureReasonPattern = /fatal:|ERROR:|error:|cannot |not possible|refus|denied|mismatch|invalid/i
 const timerFailureReasonMaxLength = 160
+const timerFailureReasonMaxLines = 3
+const timerFailureDetailMaxLength = 400
 const timerFailureTextMaxLength = 300
+const timerAnsiEscapePattern = /\x1B\[[0-9;?]*[ -/]*[@-~]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g
+const timerControlCharacterPattern = /[\u0000-\b\v\f\u000E-\u001F\u007F]/g
+
+type TimerCommandExit = Readonly<{ code: number; signal?: string }>
 
 type TelegramTimerOutput = Readonly<{
   write: (text: string) => void
@@ -196,19 +202,51 @@ function timerSummaryFind(
   return { details: [], text: "", repositorySummary: false, allCountsZero: false }
 }
 
+function timerOutputLineClean(line: string): string {
+  return line
+    .replace(/^\[[^\]]*\] /, "")
+    .replace(timerAnsiEscapePattern, "")
+    .replace(timerControlCharacterPattern, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function timerOutputLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map(timerOutputLineClean)
+    .filter((line) => line.length > 0)
+}
+
 function timerFailureReasonCompact(reason: string | undefined): string | undefined {
-  const lines = reason
-    ?.split("\n")
-    .map((entry) => entry.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-  const line = lines?.find((entry) => timerFailureReasonPattern.test(entry)) ?? lines?.[0]
+  const line =
+    timerOutputLines(reason ?? "").find((entry) => timerFailureReasonPattern.test(entry)) ??
+    timerOutputLines(reason ?? "")[0]
   return line?.slice(0, timerFailureReasonMaxLength) || undefined
+}
+
+function timerFailureStatusText(exit: TimerCommandExit): string {
+  if (exit.signal) return `killed by ${exit.signal} (exit code ${exit.code})`
+  return `exit code ${exit.code}`
+}
+
+function timerFailureDetailSelect(stdoutText: string, stderrText: string): string | undefined {
+  const stderrLines = timerOutputLines(stderrText)
+  const lines = stderrLines.length > 0 ? stderrLines : timerOutputLines(stdoutText)
+  if (lines.length === 0) return undefined
+  return lines
+    .slice(-timerFailureReasonMaxLines)
+    .map((line) => line.slice(0, timerFailureReasonMaxLength))
+    .join("; ")
+    .slice(0, timerFailureDetailMaxLength)
 }
 
 function timerFailureFind(
   stdoutText: string,
   stderrText: string,
+  exit: TimerCommandExit,
 ): Readonly<{ details: readonly string[]; text: string }> {
+  const status = timerFailureStatusText(exit)
   const structured = telegramTimerSummaryParse(stdoutText)
   const reasons: string[] = []
   for (const item of structured?.items ?? []) {
@@ -218,20 +256,19 @@ function timerFailureFind(
     reasons.push(reason ? `${failed[1]}: ${reason}` : failed[1])
   }
   if (reasons.length > 0) {
-    return { details: reasons, text: `failed: ${reasons.join("; ")}`.slice(0, timerFailureTextMaxLength) }
+    const body = `failed: ${reasons.join("; ")}`.slice(0, timerFailureTextMaxLength)
+    return { details: reasons, text: `${body} (${status})` }
   }
-  const lines = [...stderrText.split(/\r?\n/), ...stdoutText.split(/\r?\n/)].map((line) =>
-    line.replace(/^\[[^\]]*\] /, "").trim(),
-  )
+  const lines = timerOutputLines(`${stderrText}\n${stdoutText}`)
   const names =
     lines
       .find((line) => line.startsWith("== failed:"))
       ?.slice("== failed:".length)
       .trim() ?? ""
-  const why = timerFailureReasonCompact(
-    lines.find((line) => timerFailureReasonPattern.test(line)) ?? lines.find((line) => line.length > 0),
-  )
-  return { details: names ? [names] : [], text: `failed${names ? `: ${names}` : ""}${why ? ` (${why})` : ""}` }
+  const keyword = lines.filter((line) => timerFailureReasonPattern.test(line)).at(-1)
+  const why = keyword?.slice(0, timerFailureReasonMaxLength) ?? timerFailureDetailSelect(stdoutText, stderrText)
+  const detail = [why, status].filter(Boolean).join("; ")
+  return { details: names ? [names] : [], text: `failed${names ? `: ${names}` : ""} (${detail})` }
 }
 
 function timerDateFormat(date: Date): string {
@@ -269,9 +306,9 @@ async function timerCommandRun(
   stderrCapture: TimerCapture,
   stdout: TelegramTimerOutput,
   stderr: TelegramTimerOutput,
-): Promise<number> {
+): Promise<TimerCommandExit> {
   const [executable, ...arguments_] = command
-  if (!executable) return 2
+  if (!executable) return { code: 2 }
 
   const child = spawn(executable, arguments_, {
     env,
@@ -288,23 +325,28 @@ async function timerCommandRun(
     stderr.write(stderrDecoder.decode(chunk, { stream: true }))
   })
 
-  const result = await new Promise<Readonly<{ code: number; error?: string }>>((resolve) => {
+  const result = await new Promise<Readonly<{ code: number; signal?: string; error?: string }>>((resolve) => {
     child.once("error", (error: Error) => resolve({ code: 127, error: error.message }))
     child.once("close", (code, signal) => {
       if (code !== null) {
         resolve({ code })
         return
       }
-      resolve({ code: signal ? 128 : 1 })
+      resolve({ code: 128, signal: signal ?? undefined })
     })
   })
   const finalStdout = stdoutDecoder.decode()
   if (finalStdout) stdout.write(finalStdout)
   const finalStderr = stderrDecoder.decode()
   if (finalStderr) stderr.write(finalStderr)
-  if (result.error) stderr.write(`${result.error}\n`)
+  if (result.error) {
+    const spawnMessage = `tg-timer: command failed to start: ${result.error}\n`
+    stderrCapture.write(Buffer.from(spawnMessage))
+    stderr.write(spawnMessage)
+  }
   await Promise.all([stdoutCapture.finish(), stderrCapture.finish()])
-  return result.code
+  if (result.signal) return { code: result.code, signal: result.signal }
+  return { code: result.code }
 }
 
 async function timerFileReadBounded(
@@ -351,7 +393,8 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     workDirectory = await mkdtemp(join(tmpdir(), "tg-timer-"))
     const stdoutCapture = timerCaptureCreate(join(workDirectory, "stdout"))
     const stderrCapture = timerCaptureCreate(join(workDirectory, "stderr"))
-    exitCode = await timerCommandRun(options.command, env, stdoutCapture, stderrCapture, stdout, stderr)
+    const runExit = await timerCommandRun(options.command, env, stdoutCapture, stderrCapture, stdout, stderr)
+    exitCode = runExit.code
     const ended = (options.now ?? (() => new Date()))()
     const duration = Math.max(0, Math.floor((ended.getTime() - started.getTime()) / 1000))
     const stdoutContents = await readFile(stdoutCapture.file)
@@ -367,8 +410,16 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
     const status = exitCode === 0 ? "✅" : exitCode === 3 ? "⚠️" : "❌"
     const result = exitCode === 0 ? "ok" : exitCode === 3 ? "needs attention" : "failed"
     const prefix = env.TG_TIMER_PREFIX ?? ""
+    const commandExit: TimerCommandExit = runExit.signal
+      ? { code: exitCode, signal: runExit.signal }
+      : { code: exitCode }
+    const failureStatus = timerFailureStatusText(commandExit)
+    const structuredFailureStatus = exitCode === 0 ? "" : ` (${timerHtmlEscape(failureStatus)})`
+    const structuredFailureStatusText = exitCode === 0 ? "" : ` (${failureStatus})`
     const failure =
-      exitCode === 0 || exitCode === 3 ? { details: [], text: "" } : timerFailureFind(stdoutText, stderrText)
+      exitCode === 0 || exitCode === 3
+        ? { details: [], text: "" }
+        : timerFailureFind(stdoutText, stderrText, commandExit)
     const failureHeader = failure.text
       ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${timerHtmlEscape(failure.text)} in ${duration}s ${status}`
       : `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result} in ${duration}s ${status}`
@@ -379,7 +430,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
       exitCode === 3
         ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: ${result}${summary.text ? `: ${timerHtmlEscape(summary.text)}` : ""} in ${duration}s ${status}`
         : structuredReport
-          ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: <b>${structuredReport.titleHtml}</b> in ${duration}s ${status}`
+          ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: <b>${structuredReport.titleHtml}</b>${structuredFailureStatus} in ${duration}s ${status}`
           : summary.repositorySummary
             ? `${prefix}<b>${timerHtmlEscape(options.name)}</b>: in ${duration}s ${status}`
             : summary.text
@@ -389,7 +440,7 @@ async function telegramTimerRun(options: TelegramTimerRunOptions): Promise<Resul
       exitCode === 3
         ? `${prefix}${options.name}: ${result}${summary.text ? `: ${summary.text}` : ""} in ${duration}s ${status}`
         : structuredReport
-          ? `${prefix}${options.name}: ${structuredReport.title} in ${duration}s ${status}`
+          ? `${prefix}${options.name}: ${structuredReport.title}${structuredFailureStatusText} in ${duration}s ${status}`
           : summary.repositorySummary
             ? `${prefix}${options.name}: in ${duration}s ${status}`
             : summary.text
